@@ -411,7 +411,7 @@ module Make(C:Config) (I:I) : S with module I = I
       let maybev_to_location v = Location_global (I.V.maybevToV v)
 
       let do_brackets =
-        if C.brackets then Printf.sprintf "[%s]"
+        if C.brackets then Printf.sprintf "*%s"
         else fun s -> s
 
       let do_dump_location tr = function

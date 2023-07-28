@@ -27,6 +27,7 @@ module Make
            let initialiser = key_value_str (A.pp_reg reg) (A.I.V.pp_v v) in
            (locations, IntMap.update proc (update_cons initialiser) inits)
         | A.Location_global v2 ->
+           (* (match v2 with | Var x -> () | Val y -> ()); *)
            let initialiser = key_value_str (quote (A.I.V.pp_v v2)) (quote (A.I.V.pp_v v)) in
            (locations @ [initialiser], inits) in
       A.state_fold accum test.Test_herd.init_state ([], IntMap.empty)
@@ -41,6 +42,23 @@ module Make
         print_endline "\"\"\"" in
       List.iter print_thread test.Test_herd.start_points
 
+    let bracket = sprintf "(%s)"
+
+    let rec format_constraint_expr = let open ConstrGen in function
+      | Atom atom -> begin match atom with (* dump_atom A.dump_location A.pp_location_brk (fun _ -> "###") A.I.FaultType.pp atom *)
+        | LV (loc, v) -> sprintf "%s = %s" (dump_rloc A.dump_location loc) (A.I.V.pp_v v)
+        | LL (loc1, loc2) -> sprintf "%s = %s" (A.pp_location_brk loc1) (A.pp_location_brk loc2)
+        | FF f -> Fault.pp_fatom A.I.V.pp_v A.I.FaultType.pp f end
+      | Not expr -> "~" ^ bracket (format_constraint_expr expr)
+      | And exprs -> String.concat " & " (List.map (fun expr -> bracket (format_constraint_expr expr)) exprs)
+      | Or exprs -> String.concat " | " (List.map (fun expr -> bracket (format_constraint_expr expr)) exprs)
+      | Implies (l, r) -> sprintf "(%s) -> (%s)" (format_constraint_expr l) (format_constraint_expr r)
+
+    let tmp_expand = let open ConstrGen in function
+    | ForallStates x -> x
+    | ExistsState y -> y
+    | NotExistsState z -> z
+
     let print_converted (test : T.result) =
       print_header test;
       print_newline ();
@@ -50,5 +68,6 @@ module Make
       print_threads test inits;
       print_newline ();
       print_endline "[final]";
-      print_endline "TODO"
+      (* print_endline "TODO"; *)
+      print_key "assertion" (quote (format_constraint_expr (tmp_expand test.Test_herd.cond)))
   end
