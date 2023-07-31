@@ -70,9 +70,11 @@ module Make
     let print_converted (test : T.result) =
       let (addresses, locations, inits) = process_init_state test in
       print_header test addresses;
-      print_newline ();
-      print_endline "[locations]";
-      List.iter print_endline locations;
+      if locations <> [] then begin
+        print_newline ();
+        print_endline "[locations]";
+        List.iter print_endline locations;
+      end;
       print_threads test inits;
       print_newline ();
       print_endline "[final]";
