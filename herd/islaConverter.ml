@@ -20,7 +20,8 @@ module Make
       (* isla-axiomatic docs say addresses can be used as a synonym for symbolic, but this doesn't seem to actually work, so symbolic it is *)
       print_key "symbolic" (addresses |> StringSet.elements |> List.map quote |> String.concat ", " |> sprintf "[%s]")
 
-    let process_init_state (test : T.result) : StringSet.t * string list * string list IntMap.t =
+    (* should really make this return a record at some point *)
+    let process_init_state (test : T.result) : StringSet.t * string list * string list IntMap.t * string list =
       let update_cons x = function
         | None -> Some [x]
         | Some xs -> Some (x::xs) in
@@ -29,22 +30,26 @@ module Make
         | A.I.V.Var i -> printf "Encountered Var: %s\n" (A.I.V.pp_csym i) (* not sure what this is, doesn't trigger anywhere in the tests from HAND *)
         | A.I.V.Val (Constant.Symbolic s) -> addresses := StringSet.add (Constant.pp_symbol s) !addresses
         | _ -> () in
-      let accum loc v (locations, inits) = process_v v; match loc with
+      let accum loc v (locations, inits, types) = process_v v; match loc with
         | A.Location_reg (proc, reg) ->
            let initialiser = key_value_str (A.pp_reg reg) (quote (A.I.V.pp_v v)) in
-           (locations, IntMap.update proc (update_cons initialiser) inits)
+           (locations, IntMap.update proc (update_cons initialiser) inits, types)
         | A.Location_global v2 ->
+           let key = quote (A.I.V.pp_v v2) in
+           let types = let open TestType in match A.look_type test.type_env loc with
+             | TestType.Ty type_name -> types @ [key_value_str key (quote type_name)]
+             | _ -> types in
            process_v v2;
-           let initialiser = key_value_str (quote (A.I.V.pp_v v2)) (quote (A.I.V.pp_v v)) in
-           (locations @ [initialiser], inits) in
-      let (locs, inits) = A.state_fold accum test.init_state ([], IntMap.empty)
-      in (!addresses, locs, inits)
+           let initialiser = key_value_str key (quote (A.I.V.pp_v v)) in
+           (locations @ [initialiser], inits, types) in
+      let (locs, inits, types) = A.state_fold accum test.init_state ([], IntMap.empty, [])
+      in (!addresses, locs, inits, types)
 
     let print_threads (test : T.result) (inits : string list IntMap.t) =
       let print_thread (proc, code, _) =
         print_newline ();
         printf "[thread.%s]\n" (Proc.dump proc);
-        print_key "init" (sprintf "{ %s }\n" (String.concat ", " (IntMap.find proc inits)));
+        print_key "init" (sprintf "{ %s }" (String.concat ", " (IntMap.find proc inits)));
         print_endline "code = \"\"\"";
         List.iter (fun (_, instr) -> printf "\t%s\n" (A.dump_instruction instr)) code; (* TODO restore labels *)
         print_endline "\"\"\"" in
@@ -68,12 +73,17 @@ module Make
     | NotExistsState e -> ("unsat", e)
 
     let print_converted (test : T.result) =
-      let (addresses, locations, inits) = process_init_state test in
+      let (addresses, locations, inits, types) = process_init_state test in
       print_header test addresses;
       if locations <> [] then begin
         print_newline ();
         print_endline "[locations]";
-        List.iter print_endline locations;
+        List.iter print_endline locations
+      end;
+      if types <> [] then begin
+        print_newline ();
+        print_endline "[types]";
+        List.iter print_endline types
       end;
       print_threads test inits;
       print_newline ();
