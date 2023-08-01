@@ -20,6 +20,11 @@ module Make
       (* isla-axiomatic docs say addresses can be used as a synonym for symbolic, but this doesn't seem to actually work, so symbolic it is *)
       print_key "symbolic" (addresses |> StringSet.elements |> List.map quote |> String.concat ", " |> sprintf "[%s]")
 
+    let pp_v = function
+      | A.I.V.Var i -> sprintf "Encountered Var: %s\n" (A.I.V.pp_csym i)
+      | A.I.V.Val (Constant.Label (_, label)) -> sprintf "%s:" label
+      | v -> A.I.V.pp_v v
+
     (* should really make this return a record at some point *)
     let process_init_state (test : T.result) : StringSet.t * string list * string list IntMap.t * string list =
       let update_cons x = function
@@ -32,15 +37,15 @@ module Make
         | _ -> () in
       let accum loc v (locations, inits, types) = process_v v; match loc with
         | A.Location_reg (proc, reg) ->
-           let initialiser = key_value_str (A.pp_reg reg) (quote (A.I.V.pp_v v)) in
+           let initialiser = key_value_str (A.pp_reg reg) (quote (pp_v v)) in
            (locations, IntMap.update proc (update_cons initialiser) inits, types)
         | A.Location_global v2 ->
-           let key = quote (A.I.V.pp_v v2) in
+           let key = quote (pp_v v2) in
            let types = let open TestType in match A.look_type test.type_env loc with
              | TestType.Ty type_name -> types @ [key_value_str key (quote type_name)]
              | _ -> types in
            process_v v2;
-           let initialiser = key_value_str key (quote (A.I.V.pp_v v)) in
+           let initialiser = key_value_str key (quote (pp_v v)) in
            (locations @ [initialiser], inits, types) in
       let (locs, inits, types) = A.state_fold accum test.init_state ([], IntMap.empty, [])
       in (!addresses, locs, inits, types)
@@ -50,7 +55,7 @@ module Make
         print_newline ();
         (match x with | Some _ -> print_endline "Encountered a Some" | None -> ());
         printf "[thread.%s]\n" (Proc.dump proc);
-        print_key "init" (sprintf "{ %s }" (String.concat ", " (IntMap.find proc inits)));
+        print_key "init" (sprintf "{ %s }" (IntMap.find_opt proc inits |> Option.value ~default:[] |> String.concat ", "));
         print_endline "code = \"\"\"";
         let print_instruction (addr, instr) =
           begin match IntMap.find_opt addr addr_to_label with
@@ -58,7 +63,7 @@ module Make
             | None -> ()
           end;
           printf "\t%s\n" (A.dump_instruction instr) in
-        List.iter print_instruction code; (* TODO restore labels in jump/branch instructions *)
+        List.iter print_instruction code; (* TODO restore labels in jump/branch instructions *) (* Also labels at the end of a thread's code *)
         print_endline "\"\"\"" in
       List.iter print_thread test.start_points
 
