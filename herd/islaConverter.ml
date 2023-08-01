@@ -45,13 +45,20 @@ module Make
       let (locs, inits, types) = A.state_fold accum test.init_state ([], IntMap.empty, [])
       in (!addresses, locs, inits, types)
 
-    let print_threads (test : T.result) (inits : string list IntMap.t) =
-      let print_thread (proc, code, _) =
+    let print_threads (test : T.result) (inits : string list IntMap.t) (addr_to_label : Label.t IntMap.t) =
+      let print_thread (proc, code, x) =
         print_newline ();
+        (match x with | Some _ -> print_endline "Encountered a Some" | None -> ());
         printf "[thread.%s]\n" (Proc.dump proc);
         print_key "init" (sprintf "{ %s }" (String.concat ", " (IntMap.find proc inits)));
         print_endline "code = \"\"\"";
-        List.iter (fun (_, instr) -> printf "\t%s\n" (A.dump_instruction instr)) code; (* TODO restore labels *)
+        let print_instruction (addr, instr) =
+          begin match IntMap.find_opt addr addr_to_label with
+            | Some label -> printf "%s:\n" label
+            | None -> ()
+          end;
+          printf "\t%s\n" (A.dump_instruction instr) in
+        List.iter print_instruction code; (* TODO restore labels in jump/branch instructions *)
         print_endline "\"\"\"" in
       List.iter print_thread test.start_points
 
@@ -59,8 +66,8 @@ module Make
 
     let rec format_constraint_expr = let open ConstrGen in function
       | Atom atom -> begin match atom with
-        | LV (loc, v) -> sprintf "%s = %s" (dump_rloc A.dump_location loc) (A.I.V.pp_v v)
-        | LL (loc1, loc2) -> sprintf "%s = %s" (A.pp_location_brk loc1) (A.pp_location_brk loc2)
+        | LV (loc, v) -> key_value_str (dump_rloc A.dump_location loc) (A.I.V.pp_v v)
+        | LL (loc1, loc2) -> key_value_str (A.pp_location_brk loc1) (A.pp_location_brk loc2)
         | FF f -> Fault.pp_fatom A.I.V.pp_v A.I.FaultType.pp f end
       | Not expr -> "~" ^ bracket (format_constraint_expr expr)
       | And exprs -> String.concat " & " (List.map (fun expr -> bracket (format_constraint_expr expr)) exprs)
@@ -71,6 +78,9 @@ module Make
     | ForallStates e -> ("unsat", Not e)
     | ExistsState e -> ("sat", e)
     | NotExistsState e -> ("unsat", e)
+
+    let addr_to_label (test : T.result) =
+      Label.Map.fold (Fun.flip IntMap.add) test.program IntMap.empty
 
     let print_converted (test : T.result) =
       let (addresses, locations, inits, types) = process_init_state test in
@@ -85,7 +95,7 @@ module Make
         print_endline "[types]";
         List.iter print_endline types
       end;
-      print_threads test inits;
+      print_threads test inits (addr_to_label test);
       print_newline ();
       print_endline "[final]";
       let (expect, expr) = expect_and_expr test.cond in
