@@ -53,17 +53,24 @@ module Make
     let print_threads (test : T.result) (inits : string list IntMap.t) (addr_to_label : Label.t IntMap.t) =
       let print_thread (proc, code, x) =
         print_newline ();
-        (match x with | Some _ -> print_endline "Encountered a Some" | None -> ());
+        (match x with | Some _ -> print_endline "Encountered a Some" | None -> ()); (* what is this? *)
         printf "[thread.%s]\n" (Proc.dump proc);
         print_key "init" (sprintf "{ %s }" (IntMap.find_opt proc inits |> Option.value ~default:[] |> String.concat ", "));
         print_endline "code = \"\"\"";
-        let print_instruction (addr, instr) =
-          begin match IntMap.find_opt addr addr_to_label with
+        let print_label addr =
+          match IntMap.find_opt addr addr_to_label with
             | Some label -> printf "%s:\n" label
-            | None -> ()
-          end;
-          printf "\t%s\n" (A.dump_instruction instr) in
-        List.iter print_instruction code; (* TODO restore labels in jump/branch instructions *) (* Also labels at the end of a thread's code *)
+            | None -> () in
+        let print_instruction (addr, instr) =
+          printf "\t%s\n" (A.dump_instruction instr);
+          match IntMap.find_opt (A.size_of_ins instr + addr) addr_to_label with
+            | Some label -> printf "%s:\n" label
+            | None -> () in
+        begin match code with
+          | [] -> ()
+          | (start_addr, _)::_ -> print_label start_addr; List.iter print_instruction code
+        end;
+        (* TODO restore labels in jump/branch instructions *)
         print_endline "\"\"\"" in
       List.iter print_thread test.start_points
 
