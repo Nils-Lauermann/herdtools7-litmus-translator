@@ -63,9 +63,7 @@ module Make
             | None -> () in
         let print_instruction (addr, instr) =
           printf "\t%s\n" (A.dump_instruction instr);
-          match IntMap.find_opt (A.size_of_ins instr + addr) addr_to_label with
-            | Some label -> printf "%s:\n" label
-            | None -> () in
+          print_label (A.size_of_ins instr + addr) in
         begin match code with
           | [] -> ()
           | (start_addr, _)::_ -> print_label start_addr; List.iter print_instruction code
