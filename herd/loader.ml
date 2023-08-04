@@ -58,7 +58,7 @@ struct
         preload_labels proc m addr code)
       Label.Map.empty
 
-  let convert_lbl_to_offset proc pc mem instr =
+  (* let convert_lbl_to_offset proc pc mem instr =
     let labelmap =
       let open BranchTarget in
       function
@@ -79,7 +79,7 @@ struct
              (Proc.pp proc) (Label.pp l)
              (Proc.pp tgt_proc) (Label.Full.pp (tgt_proc,l))
     | Offset _ as x -> x in
-    A.map_labels_base labelmap instr
+    A.map_labels_base labelmap instr *)
 
   let rec load_code proc addr mem rets = function
     | [] ->
@@ -94,8 +94,8 @@ struct
     | A.Instruction ins ->
         let start,new_rets =
           load_code proc (addr+A.size_of_ins ins) mem rets code in
-        let new_ins =
-          convert_lbl_to_offset proc addr mem ins in
+        let new_ins = ins
+          (* convert_lbl_to_offset proc addr mem ins *) in
         let new_start = (addr,new_ins)::start in
         let newer_rets = IntMap.add addr (proc,new_start)  new_rets in
         new_start,newer_rets

@@ -8,6 +8,14 @@ module Make
   struct
     module T = Test_herd.Make(A)
 
+    let labels_to_offsets (test : T.result) addr =
+      let to_offset = let open BranchTarget in function
+        | Lbl label ->
+          let target = Label.Map.find label test.program in
+          Offset (target - addr)
+        | Offset _ as o -> o in
+      A.map_labels_base to_offset
+
     let key_value_str = sprintf "%s = %s"
     let print_key k v = print_endline (key_value_str k v)
 
@@ -68,7 +76,6 @@ module Make
           | [] -> ()
           | (start_addr, _)::_ -> print_label start_addr; List.iter print_instruction code
         end;
-        (* TODO restore labels in jump/branch instructions *)
         print_endline "\"\"\"" in
       List.iter print_thread test.start_points
 
