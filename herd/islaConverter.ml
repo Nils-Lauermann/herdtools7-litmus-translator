@@ -1,8 +1,6 @@
 open Printf
 open Test_herd
 
-module StringSet = Set.Make(String)
-
 module Make
     (A:Arch_herd.S) =
   struct
@@ -33,15 +31,25 @@ module Make
       | A.I.V.Val (Constant.Label (_, label)) -> sprintf "%s:" label
       | v -> A.I.V.pp_v v
 
+    let looks_like_branch = function
+      | big when big >= 1 lsl 32 -> false
+      | b when b lsr 26 = 0b000101 -> true
+      | bcond when bcond lsr 24 = 0b01010100 -> true
+      | _ -> false
+
     (* should really make this return a record at some point *)
-    let process_init_state (test : T.result) : StringSet.t * string list * string list IntMap.t * string list =
+    let process_init_state (test : T.result) : IntSet.t * Label.Set.t * StringSet.t * string list * string list IntMap.t * string list =
       let update_cons x = function
         | None -> Some [x]
         | Some xs -> Some (x::xs) in
       let addresses = ref StringSet.empty in
+      let labels = ref Label.Set.empty in
+      let branches = ref IntSet.empty in
       let process_v = function
         | A.I.V.Var i -> printf "Encountered Var: %s\n" (A.I.V.pp_csym i) (* not sure what this is, doesn't trigger anywhere in the tests from HAND *)
         | A.I.V.Val (Constant.Symbolic s) -> addresses := StringSet.add (Constant.pp_symbol s) !addresses
+        | A.I.V.Val (Constant.Label (_, label)) -> labels := Label.Set.add label !labels
+        | A.I.V.Val (Constant.Concrete instr) when looks_like_branch (A.I.V.Cst.Scalar.to_int instr) -> branches := IntSet.add (A.I.V.Cst.Scalar.to_int instr) !branches
         | _ -> () in
       let accum loc v (locations, inits, types) = process_v v; match loc with
         | A.Location_reg (proc, reg) ->
@@ -56,7 +64,7 @@ module Make
            let initialiser = key_value_str key (quote (pp_v v)) in
            (locations @ [initialiser], inits, types) in
       let (locs, inits, types) = A.state_fold accum test.init_state ([], IntMap.empty, [])
-      in (!addresses, locs, inits, types)
+      in (!branches, !labels, !addresses, locs, inits, types)
 
     let print_threads (test : T.result) (inits : string list IntMap.t) (addr_to_label : Label.t IntMap.t) =
       let print_thread (proc, code, x) =
@@ -99,14 +107,37 @@ module Make
     let addr_to_label (test : T.result) =
       Label.Map.fold (Fun.flip IntMap.add) test.program IntMap.empty
 
+    exception Unknown_Self_Modify of string
+
+    let encoding instruction =
+      let instruction_str = A.dump_instruction instruction in
+      let open String in
+      if starts_with ~prefix:"B ." instruction_str then
+        let offset_str = sub instruction_str 3 (length instruction_str - 3) in
+        0x1400_0000 lor (int_of_string offset_str asr 2)
+      else
+        raise (Unknown_Self_Modify instruction_str)
+
     let print_converted (test : T.result) =
-      let (addresses, locations, inits, types) = process_init_state test in
+      let (branches, labels, addresses, locations, inits, types) = process_init_state test in
       print_header test addresses;
       if locations <> [] then begin
         print_newline ();
         print_endline "[locations]";
         List.iter print_endline locations
       end;
+      let print_selfmodify label =
+        print_newline ();
+        print_endline "[[self_modify]]";
+        print_key "address" (quote (label ^ ":"));
+        print_endline "bytes = 4"; (* assume AArch64 *)
+        print_endline "values = [";
+        IntSet.iter (printf "  \"%#x\",\n") branches;
+        let addr = Label.Map.find label test.program in
+        let instr = IntMap.find addr test.code_segment |> snd |> List.hd |> snd in
+        printf "  \"%#x\"\n" (instr |> labels_to_offsets test addr |> encoding);
+        print_endline "]" in
+      Label.Set.iter print_selfmodify labels;
       if types <> [] then begin
         print_newline ();
         print_endline "[types]";
