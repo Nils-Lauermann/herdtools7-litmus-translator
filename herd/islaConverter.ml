@@ -26,16 +26,21 @@ module Make
       (* isla-axiomatic docs say addresses can be used as a synonym for symbolic, but this doesn't seem to actually work, so symbolic it is *)
       print_key "symbolic" (addresses |> StringSet.elements |> List.map quote |> String.concat ", " |> sprintf "[%s]")
 
-    let pp_v = function
-      | A.I.V.Var i -> sprintf "Encountered Var: %s\n" (A.I.V.pp_csym i)
-      | A.I.V.Val (Constant.Label (_, label)) -> sprintf "%s:" label
-      | v -> A.I.V.pp_v v
-
     let looks_like_branch = function
       | big when big >= 1 lsl 32 -> false
       | b when b lsr 26 = 0b000101 -> true
       | bcond when bcond lsr 24 = 0b01010100 -> true
       | _ -> false
+
+    let pp_v = function
+      | A.I.V.Var i -> sprintf "Encountered Var: %s\n" (A.I.V.pp_csym i)
+      | A.I.V.Val (Constant.Label (_, label)) -> sprintf "%s:" label
+      | A.I.V.Val (Constant.Concrete n) -> let n = A.I.V.Cst.Scalar.to_int n in
+        if looks_like_branch n then
+          sprintf "%#x" n
+        else
+          string_of_int n
+      | v -> A.I.V.pp_v v
 
     (* should really make this return a record at some point *)
     let process_init_state (test : T.result) : IntSet.t * Label.Set.t * StringSet.t * string list * string list IntMap.t * string list =
@@ -118,6 +123,9 @@ module Make
       if starts_with ~prefix:"B ." instruction_str then
         let offset_str = sub instruction_str 3 (length instruction_str - 3) in
         0x1400_0000 lor (int_of_string offset_str asr 2)
+      else if starts_with ~prefix:"B.EQ ." instruction_str then
+        let offset_str = sub instruction_str 6 (length instruction_str - 6) in
+        0x5400_0000 lor (int_of_string offset_str lsl 3)
       else
         raise (Unknown_Self_Modify instruction_str)
 
