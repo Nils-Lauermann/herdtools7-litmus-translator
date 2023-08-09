@@ -66,7 +66,7 @@ module Make
       let (locs, inits, types) = A.state_fold accum test.init_state ([], IntMap.empty, [])
       in (!branches, !labels, !addresses, locs, inits, types)
 
-    let print_threads (test : T.result) (inits : string list IntMap.t) (addr_to_label : Label.t IntMap.t) =
+    let print_threads (test : T.result) (inits : string list IntMap.t) (addr_to_labels : Label.t list IntMap.t) =
       let print_thread (proc, code, x) =
         print_newline ();
         (match x with | Some _ -> print_endline "Encountered a Some" | None -> ()); (* what is this? *)
@@ -74,8 +74,8 @@ module Make
         print_key "init" (sprintf "{ %s }" (IntMap.find_opt proc inits |> Option.value ~default:[] |> String.concat ", "));
         print_endline "code = \"\"\"";
         let print_label addr =
-          match IntMap.find_opt addr addr_to_label with
-            | Some label -> printf "%s:\n" label
+          match IntMap.find_opt addr addr_to_labels with
+            | Some labels -> List.iter (printf "%s:\n") labels
             | None -> () in
         let print_instruction (addr, instr) =
           printf "\t%s\n" (A.dump_instruction instr);
@@ -104,8 +104,11 @@ module Make
     | ExistsState e -> ("sat", e)
     | NotExistsState e -> ("unsat", e)
 
-    let addr_to_label (test : T.result) =
-      Label.Map.fold (Fun.flip IntMap.add) test.program IntMap.empty
+    let addr_to_labels (test : T.result) =
+      let add_label label = function
+        | None -> Some [label]
+        | Some labels -> Some (label :: labels) in
+      Label.Map.fold (fun label addr out -> IntMap.update addr (add_label label) out) test.program IntMap.empty
 
     exception Unknown_Self_Modify of string
 
@@ -143,7 +146,7 @@ module Make
         print_endline "[types]";
         List.iter print_endline types
       end;
-      print_threads test inits (addr_to_label test);
+      print_threads test inits (addr_to_labels test);
       print_newline ();
       print_endline "[final]";
       let (expect, expr) = expect_and_expr test.cond in
