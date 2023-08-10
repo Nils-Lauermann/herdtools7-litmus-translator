@@ -152,11 +152,6 @@ module Make
     let print_converted (test : T.result) =
       let (branches, labels, addresses, locations, inits, types) = process_init_state test in
       print_header test addresses;
-      if locations <> [] then begin
-        print_newline ();
-        print_endline "[locations]";
-        List.iter print_endline locations
-      end;
       let print_selfmodify label =
         print_newline ();
         print_endline "[[self_modify]]";
@@ -169,6 +164,11 @@ module Make
         printf "  \"%#x\"\n" (instr |> labels_to_offsets test addr |> encoding);
         print_endline "]" in
       Label.Set.iter print_selfmodify labels;
+      if locations <> [] then begin
+        print_newline ();
+        print_endline "[locations]";
+        List.iter print_endline locations
+      end;
       if types <> [] then begin
         print_newline ();
         print_endline "[types]";
