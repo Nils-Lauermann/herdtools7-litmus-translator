@@ -103,20 +103,31 @@ module Make
 
     let bracket = sprintf "(%s)"
 
-    let rec format_constraint_expr = let open ConstrGen in function
+    let rec format_subexpr connective = let open ConstrGen in function
       | Atom atom -> begin match atom with
         | LV (loc, v) -> key_value_str (dump_rloc A.dump_location loc) (pp_v v)
         | LL (loc1, loc2) -> key_value_str (A.pp_location_brk loc1) (A.pp_location_brk loc2)
         | FF f -> Fault.pp_fatom pp_v A.I.FaultType.pp f end
       | Not expr -> "~" ^ bracket (format_constraint_expr expr)
-      | And exprs -> String.concat " & " (List.map (fun expr -> bracket (format_constraint_expr expr)) exprs)
-      | Or exprs -> String.concat " | " (List.map (fun expr -> bracket (format_constraint_expr expr)) exprs)
+      | And exprs ->
+        let str = String.concat " & " (List.map (format_subexpr (Some "&")) exprs) in
+        begin match connective with
+          | Some "&" | None -> str
+          | _ -> bracket str
+        end
+      | Or exprs ->
+        let str = String.concat " | " (List.map (format_subexpr (Some "|")) exprs) in
+        begin match connective with
+          | Some "|" | None -> str
+          | _ -> bracket str
+        end
       | Implies (l, r) -> sprintf "(%s) -> (%s)" (format_constraint_expr l) (format_constraint_expr r)
+    and format_constraint_expr e = format_subexpr None e
 
     let expect_and_expr = let open ConstrGen in function
-    | ForallStates e -> ("unsat", Not e)
-    | ExistsState e -> ("sat", e)
-    | NotExistsState e -> ("unsat", e)
+      | ForallStates e -> ("unsat", Not e)
+      | ExistsState e -> ("sat", e)
+      | NotExistsState e -> ("unsat", e)
 
     let addr_to_labels (test : T.result) =
       let add_label label = function
