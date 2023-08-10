@@ -42,6 +42,15 @@ module Make
           string_of_int n
       | v -> A.I.V.pp_v v
 
+    exception UnknownType of string
+
+    let to_isla_type = function
+      | "int8_t" | "uint8_t" -> "uint8_t"
+      | "int16_t" | "uint16_t" -> "uint16_t"
+      | "int32_t" | "uint32_t" -> "uint32_t"
+      | "int64_t" | "uint64_t" -> "uint64_t"
+      | t -> raise (UnknownType t)
+
     (* should really make this return a record at some point *)
     let process_init_state (test : T.result) : IntSet.t * Label.Set.t * StringSet.t * string list * string list IntMap.t * string list =
       let update_cons x = function
@@ -63,7 +72,7 @@ module Make
         | A.Location_global v2 ->
            let key = quote (pp_v v2) in
            let types = let open TestType in match A.look_type test.type_env loc with
-             | TestType.Ty type_name -> types @ [key_value_str key (quote type_name)]
+             | TestType.Ty type_name -> types @ [type_name |> to_isla_type |> quote |> key_value_str key]
              | _ -> types in
            process_v v2;
            let initialiser = key_value_str key (quote (pp_v v)) in
