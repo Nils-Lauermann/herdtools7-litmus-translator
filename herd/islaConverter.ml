@@ -5,6 +5,8 @@ module Make
     (A:Arch_herd.S) =
   struct
     module T = Test_herd.Make(A)
+    module Scalar = A.I.V.Cst.Scalar
+    module ScalarSet = Set.Make(Scalar)
 
     let labels_to_offsets (test : T.result) addr =
       let to_offset = let open BranchTarget in function
@@ -27,19 +29,17 @@ module Make
       print_key "symbolic" (addresses |> StringSet.elements |> List.map quote |> String.concat ", " |> sprintf "[%s]")
 
     let looks_like_branch = function
-      | big when big >= 1 lsl 32 -> false
-      | b when b lsr 26 = 0b000101 -> true
-      | bcond when bcond lsr 24 = 0b01010100 -> true
+      | big when Scalar.le (Scalar.of_int (1 lsl 32)) big -> false
+      | b when Scalar.equal (Scalar.shift_right_logical b 26) (Scalar.of_int 0b000101) -> true
+      | bcond when Scalar.equal (Scalar.shift_right_logical bcond 24) (Scalar.of_int 0b01010100) -> true
       | _ -> false
 
+    exception Unexpected of string
+
     let pp_v = function
-      | A.I.V.Var i -> sprintf "Encountered Var: %s\n" (A.I.V.pp_csym i)
+      | A.I.V.Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (A.I.V.pp_csym i)))
       | A.I.V.Val (Constant.Label (_, label)) -> sprintf "%s:" label
-      | A.I.V.Val (Constant.Concrete n) -> let n = A.I.V.Cst.Scalar.to_int n in
-        if looks_like_branch n then
-          sprintf "%#x" n
-        else
-          string_of_int n
+      | A.I.V.Val (Constant.Concrete n) -> Scalar.pp (looks_like_branch n) n (* print branches in hex *)
       | v -> A.I.V.pp_v v
 
     exception UnknownType of string
@@ -52,18 +52,18 @@ module Make
       | t -> raise (UnknownType t)
 
     (* should really make this return a record at some point *)
-    let process_init_state (test : T.result) : IntSet.t * Label.Set.t * StringSet.t * string list * string list IntMap.t * string list =
+    let process_init_state (test : T.result) : ScalarSet.t * Label.Set.t * StringSet.t * string list * string list IntMap.t * string list =
       let update_cons x = function
         | None -> Some [x]
         | Some xs -> Some (x::xs) in
       let addresses = ref StringSet.empty in
       let labels = ref Label.Set.empty in
-      let branches = ref IntSet.empty in
+      let branches = ref ScalarSet.empty in
       let process_v = function
-        | A.I.V.Var i -> printf "Encountered Var: %s\n" (A.I.V.pp_csym i) (* not sure what this is, doesn't trigger anywhere in the tests from HAND *)
+        | A.I.V.Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (A.I.V.pp_csym i))) (* not sure what this is, doesn't trigger anywhere in the tests from HAND *)
         | A.I.V.Val (Constant.Symbolic s) -> addresses := StringSet.add (Constant.pp_symbol s) !addresses
         | A.I.V.Val (Constant.Label (_, label)) -> labels := Label.Set.add label !labels
-        | A.I.V.Val (Constant.Concrete instr) when looks_like_branch (A.I.V.Cst.Scalar.to_int instr) -> branches := IntSet.add (A.I.V.Cst.Scalar.to_int instr) !branches
+        | A.I.V.Val (Constant.Concrete instr) when looks_like_branch instr -> branches := ScalarSet.add instr !branches
         | _ -> () in
       let accum loc v (locations, inits, types) = process_v v; match loc with
         | A.Location_reg (proc, reg) ->
@@ -83,7 +83,7 @@ module Make
     let print_threads (test : T.result) (inits : string list IntMap.t) (addr_to_labels : Label.t list IntMap.t) =
       let print_thread (proc, code, x) =
         print_newline ();
-        (match x with | Some _ -> print_endline "Encountered a Some" | None -> ()); (* what is this? *)
+        (match x with | Some _ -> raise (Unexpected "Encountered a Some") | None -> ()); (* what is this? *)
         printf "[thread.%s]\n" (Proc.dump proc);
         print_key "init" (sprintf "{ %s }" (IntMap.find_opt proc inits |> Option.value ~default:[] |> String.concat ", "));
         print_endline "code = \"\"\"";
@@ -152,7 +152,7 @@ module Make
         print_key "address" (quote (label ^ ":"));
         print_endline "bytes = 4"; (* assume AArch64 *)
         print_endline "values = [";
-        IntSet.iter (printf "  \"%#x\",\n") branches;
+        ScalarSet.iter (fun branch -> Scalar.pp true branch |> printf "  \"%s\",\n") branches;
         let addr = Label.Map.find label test.program in
         let instr = IntMap.find addr test.code_segment |> snd |> List.hd |> snd in
         printf "  \"%#x\"\n" (instr |> labels_to_offsets test addr |> encoding);
