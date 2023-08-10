@@ -105,9 +105,9 @@ module Make
 
     let rec format_constraint_expr = let open ConstrGen in function
       | Atom atom -> begin match atom with
-        | LV (loc, v) -> key_value_str (dump_rloc A.dump_location loc) (A.I.V.pp_v v)
+        | LV (loc, v) -> key_value_str (dump_rloc A.dump_location loc) (pp_v v)
         | LL (loc1, loc2) -> key_value_str (A.pp_location_brk loc1) (A.pp_location_brk loc2)
-        | FF f -> Fault.pp_fatom A.I.V.pp_v A.I.FaultType.pp f end
+        | FF f -> Fault.pp_fatom pp_v A.I.FaultType.pp f end
       | Not expr -> "~" ^ bracket (format_constraint_expr expr)
       | And exprs -> String.concat " & " (List.map (fun expr -> bracket (format_constraint_expr expr)) exprs)
       | Or exprs -> String.concat " | " (List.map (fun expr -> bracket (format_constraint_expr expr)) exprs)
