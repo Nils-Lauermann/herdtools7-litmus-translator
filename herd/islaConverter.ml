@@ -28,19 +28,19 @@ module Make
       (* isla-axiomatic docs say addresses can be used as a synonym for symbolic, but this doesn't seem to actually work, so symbolic it is *)
       print_key "symbolic" (addresses |> StringSet.elements |> List.map quote |> String.concat ", " |> sprintf "[%s]")
 
-    let looks_like_branch = function
-      | big when Scalar.le (Scalar.of_int (1 lsl 32)) big -> false
-      | b when Scalar.equal (Scalar.shift_right_logical b 26) (Scalar.of_int 0b000101) -> true
-      | bcond when Scalar.equal (Scalar.shift_right_logical bcond 24) (Scalar.of_int 0b01010100) -> true
+    let looks_like_branch = let open Scalar in function
+      | big when le (Scalar.of_int (1 lsl 32)) big -> false
+      | b when equal (shift_right_logical b 26) (Scalar.of_int 0b000101) -> true
+      | bcond when equal (shift_right_logical bcond 24) (Scalar.of_int 0b01010100) -> true
       | _ -> false
 
     exception Unexpected of string
 
-    let pp_v = function
-      | A.I.V.Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (A.I.V.pp_csym i)))
-      | A.I.V.Val (Constant.Label (_, label)) -> sprintf "%s:" label
-      | A.I.V.Val (Constant.Concrete n) -> Scalar.pp (looks_like_branch n) n (* print branches in hex *)
-      | v -> A.I.V.pp_v v
+    let pp_v = let open A.I.V in function
+      | Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (pp_csym i)))
+      | Val (Constant.Label (_, label)) -> sprintf "%s:" label
+      | Val (Constant.Concrete n) -> Scalar.pp (looks_like_branch n) n (* print branches in hex *)
+      | v -> pp_v v
 
     exception UnknownType of string
 
@@ -66,13 +66,13 @@ module Make
     }
 
     let process_init_state test =
-      let process_v out = function
-        | A.I.V.Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (A.I.V.pp_csym i))) (* not sure what this is, doesn't trigger anywhere in the tests from HAND *)
-        | A.I.V.Val (Constant.Symbolic s) ->
+      let process_v out = let open A.I.V in function
+        | Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (pp_csym i))) (* not sure what this is, doesn't trigger anywhere in the tests from HAND *)
+        | Val (Constant.Symbolic s) ->
           { out with addresses = StringSet.add (Constant.pp_symbol s) out.addresses }
-        | A.I.V.Val (Constant.Label (_, label)) ->
+        | Val (Constant.Label (_, label)) ->
           { out with labels = Label.Set.add label out.labels }
-        | A.I.V.Val (Constant.Concrete instr) when looks_like_branch instr ->
+        | Val (Constant.Concrete instr) when looks_like_branch instr ->
           { out with branches = ScalarSet.add instr out.branches }
         | _ -> out in
       let accum loc v out = let out = process_v out v in match loc with
@@ -83,7 +83,7 @@ module Make
            let out = process_v out v2 in
            let key = quote (pp_v v2) in
            let types = let open TestType in match A.look_type test.type_env loc with
-             | TestType.Ty type_name -> out.types @ [type_name |> to_isla_type |> quote |> key_value_str key]
+             | Ty type_name -> out.types @ [type_name |> to_isla_type |> quote |> key_value_str key]
              | _ -> out.types in
            let initialiser = key_value_str key (quote (pp_v v)) in
            { out with locs = out.locs @ [initialiser]; types } in
