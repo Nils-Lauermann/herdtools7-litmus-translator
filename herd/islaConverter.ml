@@ -8,7 +8,7 @@ module Make
     module Scalar = A.I.V.Cst.Scalar
     module ScalarSet = Set.Make(Scalar)
 
-    let labels_to_offsets (test : T.result) addr =
+    let labels_to_offsets test addr =
       let to_offset = let open BranchTarget in function
         | Lbl label ->
           let target = Label.Map.find label test.program in
@@ -21,7 +21,7 @@ module Make
 
     let quote s = sprintf "\"%s\"" (String.escaped s)
 
-    let print_header (test : T.result) (addresses : StringSet.t) =
+    let print_header test addresses =
       print_key "arch" (quote (Archs.pp A.arch));
       print_key "name" (quote test.name.Name.name);
       List.iter (fun (k, v) -> print_key (String.lowercase_ascii k) (quote v)) test.info;
@@ -51,52 +51,68 @@ module Make
       | "int64_t" | "uint64_t" -> "uint64_t"
       | t -> raise (UnknownType t)
 
-    (* should really make this return a record at some point *)
-    let process_init_state (test : T.result) : ScalarSet.t * Label.Set.t * StringSet.t * string list * string list IntMap.t * string list =
-      let update_cons x = function
-        | None -> Some [x]
-        | Some xs -> Some (x::xs) in
-      let addresses = ref StringSet.empty in
-      let labels = ref Label.Set.empty in
-      let branches = ref ScalarSet.empty in
-      let process_v = function
+    let cons_to_list_opt x = function
+      | None -> Some [x]
+      | Some xs -> Some (x::xs)
+
+    type processed_init =
+    {
+      branches : ScalarSet.t;
+      labels : Label.Set.t;
+      addresses : StringSet.t;
+      locs : string list;
+      inits : string list IntMap.t;
+      types : string list;
+    }
+
+    let process_init_state test =
+      let process_v out = function
         | A.I.V.Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (A.I.V.pp_csym i))) (* not sure what this is, doesn't trigger anywhere in the tests from HAND *)
-        | A.I.V.Val (Constant.Symbolic s) -> addresses := StringSet.add (Constant.pp_symbol s) !addresses
-        | A.I.V.Val (Constant.Label (_, label)) -> labels := Label.Set.add label !labels
-        | A.I.V.Val (Constant.Concrete instr) when looks_like_branch instr -> branches := ScalarSet.add instr !branches
-        | _ -> () in
-      let accum loc v (locations, inits, types) = process_v v; match loc with
+        | A.I.V.Val (Constant.Symbolic s) ->
+          { out with addresses = StringSet.add (Constant.pp_symbol s) out.addresses }
+        | A.I.V.Val (Constant.Label (_, label)) ->
+          { out with labels = Label.Set.add label out.labels }
+        | A.I.V.Val (Constant.Concrete instr) when looks_like_branch instr ->
+          { out with branches = ScalarSet.add instr out.branches }
+        | _ -> out in
+      let accum loc v out = let out = process_v out v in match loc with
         | A.Location_reg (proc, reg) ->
            let initialiser = key_value_str (A.pp_reg reg) (quote (pp_v v)) in
-           (locations, IntMap.update proc (update_cons initialiser) inits, types)
+           { out with inits = IntMap.update proc (cons_to_list_opt initialiser) out.inits }
         | A.Location_global v2 ->
+           let out = process_v out v2 in
            let key = quote (pp_v v2) in
            let types = let open TestType in match A.look_type test.type_env loc with
-             | TestType.Ty type_name -> types @ [type_name |> to_isla_type |> quote |> key_value_str key]
-             | _ -> types in
-           process_v v2;
+             | TestType.Ty type_name -> out.types @ [type_name |> to_isla_type |> quote |> key_value_str key]
+             | _ -> out.types in
            let initialiser = key_value_str key (quote (pp_v v)) in
-           (locations @ [initialiser], inits, types) in
-      let (locs, inits, types) = A.state_fold accum test.init_state ([], IntMap.empty, [])
-      in (!branches, !labels, !addresses, locs, inits, types)
+           { out with locs = out.locs @ [initialiser]; types } in
+      let empty =
+        {
+          branches = ScalarSet.empty;
+          labels = Label.Set.empty;
+          addresses = StringSet.empty;
+          locs = [];
+          inits = IntMap.empty;
+          types = [];
+        } in
+      A.state_fold accum test.init_state empty
 
-    let print_threads (test : T.result) (inits : string list IntMap.t) (addr_to_labels : Label.t list IntMap.t) =
+    let print_threads test inits addr_to_labels =
       let print_thread (proc, code, x) =
         print_newline ();
-        (match x with | Some _ -> raise (Unexpected "Encountered a Some") | None -> ()); (* what is this? *)
+        Option.iter (fun _ -> raise (Unexpected "Encountered a Some")) x; (* what is this? *)
         printf "[thread.%s]\n" (Proc.dump proc);
         print_key "init" (sprintf "{ %s }" (IntMap.find_opt proc inits |> Option.value ~default:[] |> String.concat ", "));
         print_endline "code = \"\"\"";
-        let print_label addr =
-          match IntMap.find_opt addr addr_to_labels with
-            | Some labels -> List.iter (printf "%s:\n") labels
-            | None -> () in
+        let print_labels addr =
+          Option.iter (List.iter (printf "%s:\n")) (IntMap.find_opt addr addr_to_labels) in
         let print_instruction (addr, instr) =
           printf "\t%s\n" (A.dump_instruction instr);
-          print_label (A.size_of_ins instr + addr) in
+          print_labels (A.size_of_ins instr + addr) in
         begin match code with
           | [] -> ()
-          | (start_addr, _)::_ -> print_label start_addr; List.iter print_instruction code
+          | (start_addr, _)::_ -> print_labels start_addr; List.iter print_instruction code
         end;
         print_endline "\"\"\"" in
       List.iter print_thread test.start_points
@@ -129,11 +145,9 @@ module Make
       | ExistsState e -> ("sat", e)
       | NotExistsState e -> ("unsat", e)
 
-    let addr_to_labels (test : T.result) =
-      let add_label label = function
-        | None -> Some [label]
-        | Some labels -> Some (label :: labels) in
-      Label.Map.fold (fun label addr out -> IntMap.update addr (add_label label) out) test.program IntMap.empty
+    let addr_to_labels test =
+      let add_label label addr out = IntMap.update addr (cons_to_list_opt label) out in
+      Label.Map.fold add_label test.program IntMap.empty
 
     exception Unknown_Self_Modify of string
 
@@ -149,10 +163,7 @@ module Make
       else
         raise (Unknown_Self_Modify instruction_str)
 
-    let print_converted (test : T.result) =
-      let (branches, labels, addresses, locations, inits, types) = process_init_state test in
-      print_header test addresses;
-      let print_selfmodify label =
+    let print_selfmodify test branches label =
         print_newline ();
         print_endline "[[self_modify]]";
         print_key "address" (quote (label ^ ":"));
@@ -162,12 +173,16 @@ module Make
         let addr = Label.Map.find label test.program in
         let instr = IntMap.find addr test.code_segment |> snd |> List.hd |> snd in
         printf "  \"%#x\"\n" (instr |> labels_to_offsets test addr |> encoding);
-        print_endline "]" in
-      Label.Set.iter print_selfmodify labels;
-      if locations <> [] then begin
+        print_endline "]"
+
+    let print_converted (test : T.result) =
+      let { branches; labels; addresses; locs; inits; types } = process_init_state test in
+      print_header test addresses;
+      Label.Set.iter (print_selfmodify test branches) labels;
+      if locs <> [] then begin
         print_newline ();
         print_endline "[locations]";
-        List.iter print_endline locations
+        List.iter print_endline locs
       end;
       if types <> [] then begin
         print_newline ();
