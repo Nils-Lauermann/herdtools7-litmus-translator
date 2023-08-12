@@ -175,6 +175,13 @@ module Make
         printf "  \"%#x\"\n" (instr |> labels_to_offsets test addr |> encoding);
         print_endline "]"
 
+    let print_final test =
+      print_newline ();
+      print_endline "[final]";
+      let (expect, expr) = expect_and_expr test.cond in
+      print_key "expect" (sprintf "\"%s\"" expect);
+      print_key "assertion" (quote (format_constraint_expr expr))
+
     let print_converted (test : T.result) =
       let { branches; labels; addresses; locs; inits; types } = process_init_state test in
       print_header test addresses;
@@ -190,9 +197,5 @@ module Make
         List.iter print_endline types
       end;
       print_threads test inits (addr_to_labels test);
-      print_newline ();
-      print_endline "[final]";
-      let (expect, expr) = expect_and_expr test.cond in
-      print_key "expect" (sprintf "\"%s\"" expect);
-      print_key "assertion" (quote (format_constraint_expr expr))
+      print_final test
   end
