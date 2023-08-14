@@ -182,20 +182,19 @@ module Make
       print_key "expect" (sprintf "\"%s\"" expect);
       print_key "assertion" (quote (format_constraint_expr expr))
 
+    let print_section_as_lines section lines =
+      if lines <> [] then begin
+        print_newline ();
+        printf "[%s]\n" section;
+        List.iter print_endline lines
+      end
+
     let print_converted (test : T.result) =
       let { branches; labels; addresses; locs; inits; types } = process_init_state test in
       print_header test addresses;
       Label.Set.iter (print_selfmodify test branches) labels;
-      if locs <> [] then begin
-        print_newline ();
-        print_endline "[locations]";
-        List.iter print_endline locs
-      end;
-      if types <> [] then begin
-        print_newline ();
-        print_endline "[types]";
-        List.iter print_endline types
-      end;
+      print_section_as_lines "locations" locs;
+      print_section_as_lines "types" types;
       print_threads test inits (addr_to_labels test);
       print_final test
   end
