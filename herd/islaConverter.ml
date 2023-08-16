@@ -35,21 +35,34 @@ module Make
       | _ -> false
 
     exception Unexpected of string
+    exception Unsupported of string
+
+    (* TODO: unwind the layers of modules to avoid this regrettable hack: *)
+    let coerce_pte_val : A.I.V.Cst.PteVal.t -> AArch64PteVal.t = Obj.magic
 
     let pp_v = let open A.I.V in function
       | Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (pp_csym i)))
       | Val (Constant.Label (_, label)) -> sprintf "%s:" label
       | Val (Constant.Concrete n) -> Scalar.pp (looks_like_branch n) n (* print branches in hex *)
+      | Val (Constant.PteVal p) -> let p' = coerce_pte_val p in if 0 = p'.AArch64PteVal.valid then "raw(extz(0x0, 64))" else begin match A.I.V.Cst.PteVal.as_physical p with
+        | None -> raise (Unsupported "PTE no physical address (intermediate?)")
+        | Some phys -> sprintf "desc3(%s, page_table_base)" phys
+      end
+      | Val (Constant.Symbolic (Constant.System (Constant.PTE, sym))) -> sprintf "pte3(%s, page_table_base)" sym
       | v -> pp_v v
 
     exception UnknownType of string
 
-    let to_isla_type = function
-      | "int8_t" | "uint8_t" -> "uint8_t"
-      | "int16_t" | "uint16_t" -> "uint16_t"
-      | "int32_t" | "uint32_t" -> "uint32_t"
-      | "int64_t" | "uint64_t" -> "uint64_t"
-      | t -> raise (UnknownType t)
+    let type_name_to_isla_type = function
+      | "int8_t" | "uint8_t" -> Some "uint8_t"
+      | "int16_t" | "uint16_t" -> Some "uint16_t"
+      | "int32_t" | "uint32_t" -> Some "uint32_t"
+      | "int64_t" | "uint64_t" -> Some "uint64_t"
+      | _ -> None
+
+    let type_to_isla_type t = let open TestType in match t with
+      | Ty type_name -> type_name_to_isla_type type_name
+      | _ -> None
 
     let cons_to_list_opt x = function
       | None -> Some [x]
@@ -61,14 +74,17 @@ module Make
       labels : Label.Set.t;
       addresses : StringSet.t;
       locs : string list;
-      inits : string list IntMap.t;
+      inits : (A.reg * string) list IntMap.t;
       types : string list;
+      pte_set : StringSet.t;
+      ptes_accessed : StringSet.t;
+      descs_written : StringSet.t;
     }
 
     let process_init_state test =
       let process_v out = let open A.I.V in function
         | Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (pp_csym i))) (* not sure what this is, doesn't trigger anywhere in the tests from HAND *)
-        | Val (Constant.Symbolic s) ->
+        | Val (Constant.Symbolic (Constant.Virtual _ as s)) ->
           { out with addresses = StringSet.add (Constant.pp_symbol s) out.addresses }
         | Val (Constant.Label (_, label)) ->
           { out with labels = Label.Set.add label out.labels }
@@ -77,16 +93,31 @@ module Make
         | _ -> out in
       let accum loc v out = let out = process_v out v in match loc with
         | A.Location_reg (proc, reg) ->
-           let initialiser = key_value_str (A.pp_reg reg) (quote (pp_v v)) in
-           { out with inits = IntMap.update proc (cons_to_list_opt initialiser) out.inits }
-        | A.Location_global v2 ->
+           let initialiser = (reg, (quote (pp_v v))) in
+           let (ptes_accessed, descs_written) = let open A.I.V in begin match v with
+             | Val (Constant.PteVal p) -> let p' = coerce_pte_val p in if 0 = p'.AArch64PteVal.valid then (out.ptes_accessed, StringSet.add "invalid" out.descs_written) else begin match A.I.V.Cst.PteVal.as_physical p with
+               | None -> raise (Unsupported "PTE no physical address (intermediate?)")
+               | Some phys -> (out.ptes_accessed, StringSet.add ("pa_" ^ phys) out.descs_written)
+             end
+             | Val (Constant.Symbolic (Constant.System (Constant.PTE, sym))) -> (StringSet.add sym out.ptes_accessed, out.descs_written)
+             | _ -> (out.ptes_accessed, out.descs_written)
+           end in
+           { out with inits = IntMap.update proc (cons_to_list_opt initialiser) out.inits; ptes_accessed; descs_written }
+        | A.Location_global (A.I.V.Val (Constant.Symbolic (Constant.Virtual _)) as v2) ->
            let out = process_v out v2 in
-           let key = quote (pp_v v2) in
-           let types = let open TestType in match A.look_type test.type_env loc with
-             | Ty type_name -> out.types @ [type_name |> to_isla_type |> quote |> key_value_str key]
+           let location_name = pp_v v2 in
+           let types = let open TestType in match type_to_isla_type (A.look_type test.type_env loc) with
+             | Some t -> out.types @ [t |> quote |> key_value_str (quote location_name)]
              | _ -> out.types in
-           let initialiser = key_value_str key (quote (pp_v v)) in
-           { out with locs = out.locs @ [initialiser]; types } in
+           let value_str = pp_v v in
+           { out with locs = (key_value_str ("*" ^ location_name) value_str)::out.locs; types }
+        | A.Location_global (A.I.V.Val (Constant.Symbolic (Constant.System (Constant.PTE, sym)))) ->
+           begin match v with
+             | A.I.V.Val (Constant.PteVal p) ->
+               { out with pte_set = StringSet.add sym out.pte_set; locs = (sprintf "%s |-> %s" sym (if (coerce_pte_val p).AArch64PteVal.valid = 0 then "invalid" else match A.I.V.Cst.PteVal.as_physical p with | None -> raise (Unsupported "PTE no physical address (intermediate?)") | Some phys -> "pa_" ^ phys))::out.locs }
+             | _ -> out
+           end
+        | _ -> out in
       let empty =
         {
           branches = ScalarSet.empty;
@@ -95,15 +126,25 @@ module Make
           locs = [];
           inits = IntMap.empty;
           types = [];
+          pte_set = StringSet.empty;
+          ptes_accessed = StringSet.empty;
+          descs_written = StringSet.empty;
         } in
       A.state_fold accum test.init_state empty
+
+    let to_sail_general_reg reg =
+      let xreg = A.pp_reg reg in
+      if xreg.[0] <> 'X' then
+        failwith "to_sail_general_reg: not general-purpose register"
+      else
+        "R" ^ String.sub xreg 1 (String.length xreg - 1)
 
     let print_threads test inits addr_to_labels =
       let print_thread (proc, code, x) =
         print_newline ();
         Option.iter (fun _ -> raise (Unexpected "Encountered a Some")) x; (* what is this? *)
         printf "[thread.%s]\n" (Proc.dump proc);
-        print_key "init" (sprintf "{ %s }" (IntMap.find_opt proc inits |> Option.value ~default:[] |> String.concat ", "));
+        (* print_key "init" (sprintf "{ %s }" (IntMap.find_opt proc inits |> Option.value ~default:[] |> String.concat ", ")); *)
         print_endline "code = \"\"\"";
         let print_labels addr =
           Option.iter (List.iter (printf "%s:\n")) (IntMap.find_opt addr addr_to_labels) in
@@ -114,7 +155,10 @@ module Make
           | [] -> ()
           | (start_addr, _)::_ -> print_labels start_addr; List.iter print_instruction code
         end;
-        print_endline "\"\"\"" in
+        print_endline "\"\"\"";
+        print_newline ();
+        printf "[thread.%s.reset]\n" (Proc.dump proc);
+        List.iter (fun (r, v) -> print_key (to_sail_general_reg r) v) (IntMap.find_opt proc inits |> Option.value ~default:[]) in
       List.iter print_thread test.start_points
 
     let bracket = sprintf "(%s)"
@@ -123,7 +167,7 @@ module Make
       | Atom atom -> begin match atom with
         | LV (loc, v) -> key_value_str (dump_rloc A.dump_location loc) (pp_v v)
         | LL (loc1, loc2) -> key_value_str (A.pp_location_brk loc1) (A.pp_location_brk loc2)
-        | FF f -> Fault.pp_fatom pp_v A.I.FaultType.pp f end
+        | FF f -> raise (Unsupported "Fault in assertion") (* Fault.pp_fatom pp_v A.I.FaultType.pp f *) end
       | Not expr -> "~" ^ bracket (format_constraint_expr expr)
       | And exprs ->
         let str = String.concat " & " (List.map (format_subexpr (Some "&")) exprs) in
@@ -189,11 +233,20 @@ module Make
         List.iter print_endline lines
       end
 
+    let print_page_table_setup addresses locs pte_unset ptes_accessed descs_written =
+      print_newline ();
+      print_endline "page_table_setup = \"\"\"";
+      printf "\tphysical %s;\n" (String.concat " " (List.map ((^) "pa_") addresses));
+      StringSet.iter (fun addr -> printf "\t%s |-> pa_%s;\n" addr addr) pte_unset;
+      List.iter (printf "\t%s;\n") locs;
+      StringSet.iter (fun sym -> StringSet.iter (printf "\t%s ?-> %s;\n" sym) descs_written) ptes_accessed;
+      print_endline "\"\"\""
+
     let print_converted (test : T.result) =
-      let { branches; labels; addresses; locs; inits; types } = process_init_state test in
+      let { branches; labels; addresses; locs; inits; types; pte_set; ptes_accessed; descs_written } = process_init_state test in
       print_header test addresses;
       Label.Set.iter (print_selfmodify test branches) labels;
-      print_section_as_lines "locations" locs;
+      print_page_table_setup (StringSet.elements addresses) locs (StringSet.diff addresses pte_set) ptes_accessed descs_written;
       print_section_as_lines "types" types;
       print_threads test inits (addr_to_labels test);
       print_final test
