@@ -40,18 +40,50 @@ module Make
     (* TODO: unwind the layers of modules to avoid this regrettable hack: *)
     let coerce_pte_val : A.I.V.Cst.PteVal.t -> AArch64PteVal.t = Obj.magic
 
-    let pp_v = let open A.I.V in function
-      | Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (pp_csym i)))
-      | Val (Constant.Label (_, label)) -> sprintf "%s:" label
-      | Val (Constant.Concrete n) -> Scalar.pp (looks_like_branch n) n (* print branches in hex *)
-      | Val (Constant.PteVal p) -> let p' = coerce_pte_val p in if 0 = p'.AArch64PteVal.valid then "raw(extz(0x0, 64))" else begin match A.I.V.Cst.PteVal.as_physical p with
-        | None -> raise (Unsupported "PTE no physical address (intermediate?)")
-        | Some phys -> sprintf "desc3(%s, page_table_base)" phys
-      end
-      | Val (Constant.Symbolic (Constant.System (Constant.PTE, sym))) -> sprintf "pte3(%s, page_table_base)" sym
-      | v -> pp_v v
+    type my_v = Label of string
+              | Concrete of Scalar.t
+              | PTE_Desc_Invalid
+              | PTE_Desc of AArch64PteVal.t
+              | PTE_Addr of string
+              | Other of A.I.V.v
 
-    exception UnknownType of string
+    let v_to_my_v = let open A.I.V in function
+      | Var i -> raise (Unexpected (sprintf "Encountered Var: %s\n" (pp_csym i)))
+      | Val (Constant.Label (_, label)) -> Label label
+      | Val (Constant.Concrete n) -> Concrete n
+      | Val (Constant.PteVal p) ->
+        let p = coerce_pte_val p in
+        if 0 = p.AArch64PteVal.valid then
+          PTE_Desc_Invalid
+        else
+          PTE_Desc p
+      | Val (Constant.Symbolic (Constant.System (Constant.PTE, sym))) -> PTE_Addr sym
+      | v -> Other v
+
+    let pp_v_for_reset v = match v_to_my_v v with
+      | Label label -> label ^ ":"
+      | Concrete n -> sprintf "extz(%s, 64)" (Scalar.pp true n)
+      | PTE_Desc_Invalid -> "raw(extz(0x0, 64))"
+      | PTE_Desc p ->
+        let open AArch64PteVal in
+        begin match (p.oa, p.af) with
+          | (OutputAddress.PTE _, _) -> raise (Unsupported "PTE no physical address (intermediate?)")
+          | (OutputAddress.PHY phys, 0) -> sprintf "bvxor(extz(0x400, 64), mkdesc3(oa=pa_%s))" phys
+          | (OutputAddress.PHY phys, 1) -> sprintf "mkdesc3(oa=pa_%s)" phys
+          | (OutputAddress.PHY _, n) -> raise (Unexpected (sprintf "AF (%d) has more than one bit" n))
+        end
+      | PTE_Addr vaddr -> sprintf "pte3(%s, page_table_base)" vaddr
+      | Other v -> A.I.V.pp_v v
+
+    let pp_v_for_assertion = function
+      | A.I.V.Val (Constant.Concrete n) -> Scalar.pp (looks_like_branch n) n
+      | v -> raise (Unexpected ("Weird value in assertion LV atom: " ^ A.I.V.pp_v v))
+
+    let pp_desc_for_page_table_setup p = let open AArch64PteVal in match (p.oa, p.af) with
+      | (OutputAddress.PTE _, _) -> raise (Unsupported "PTE no physical address (intermediate?)")
+      | (OutputAddress.PHY phys, 0) -> sprintf "pa_%s with [AF = 0b0]" phys
+      | (OutputAddress.PHY phys, 1) -> "pa_" ^ phys
+      | (OutputAddress.PHY _, n) -> raise (Unexpected (sprintf "AF (%d) has more than one bit" n))
 
     let type_name_to_isla_type = function
       | "int8_t" | "uint8_t" -> Some "uint8_t"
@@ -93,28 +125,25 @@ module Make
         | _ -> out in
       let accum loc v out = let out = process_v out v in match loc with
         | A.Location_reg (proc, reg) ->
-           let initialiser = (reg, (quote (pp_v v))) in
-           let (ptes_accessed, descs_written) = let open A.I.V in begin match v with
-             | Val (Constant.PteVal p) -> let p' = coerce_pte_val p in if 0 = p'.AArch64PteVal.valid then (out.ptes_accessed, StringSet.add "invalid" out.descs_written) else begin match A.I.V.Cst.PteVal.as_physical p with
-               | None -> raise (Unsupported "PTE no physical address (intermediate?)")
-               | Some phys -> (out.ptes_accessed, StringSet.add ("pa_" ^ phys) out.descs_written)
-             end
-             | Val (Constant.Symbolic (Constant.System (Constant.PTE, sym))) -> (StringSet.add sym out.ptes_accessed, out.descs_written)
-             | _ -> (out.ptes_accessed, out.descs_written)
-           end in
+           let initialiser = (reg, (quote (pp_v_for_reset v))) in
+           let (ptes_accessed, descs_written) = match v_to_my_v v with
+             | PTE_Desc_Invalid -> (out.ptes_accessed, StringSet.add "invalid" out.descs_written)
+             | PTE_Desc p -> (out.ptes_accessed, StringSet.add (pp_desc_for_page_table_setup p) out.descs_written)
+             | PTE_Addr vaddr -> (StringSet.add vaddr out.ptes_accessed, out.descs_written)
+             | _ -> (out.ptes_accessed, out.descs_written) in
            { out with inits = IntMap.update proc (cons_to_list_opt initialiser) out.inits; ptes_accessed; descs_written }
         | A.Location_global (A.I.V.Val (Constant.Symbolic (Constant.Virtual _)) as v2) ->
            let out = process_v out v2 in
-           let location_name = pp_v v2 in
+           let location_name = A.I.V.pp_v v2 in
            let types = let open TestType in match type_to_isla_type (A.look_type test.type_env loc) with
              | Some t -> out.types @ [t |> quote |> key_value_str (quote location_name)]
              | _ -> out.types in
-           let value_str = pp_v v in
+           let value_str = A.I.V.pp_v v in
            { out with locs = (key_value_str ("*" ^ location_name) value_str)::out.locs; types }
-        | A.Location_global (A.I.V.Val (Constant.Symbolic (Constant.System (Constant.PTE, sym)))) ->
-           begin match v with
-             | A.I.V.Val (Constant.PteVal p) ->
-               { out with pte_set = StringSet.add sym out.pte_set; locs = (sprintf "%s |-> %s" sym (if (coerce_pte_val p).AArch64PteVal.valid = 0 then "invalid" else match A.I.V.Cst.PteVal.as_physical p with | None -> raise (Unsupported "PTE no physical address (intermediate?)") | Some phys -> "pa_" ^ phys))::out.locs }
+        | A.Location_global (A.I.V.Val (Constant.Symbolic (Constant.System (Constant.PTE, vaddr)))) ->
+           begin match v_to_my_v v with
+             | PTE_Desc_Invalid -> { out with pte_set = StringSet.add vaddr out.pte_set; locs = (sprintf "%s |-> invalid" vaddr)::out.locs }
+             | PTE_Desc p -> { out with pte_set = StringSet.add vaddr out.pte_set; locs = (sprintf "%s |-> %s" vaddr (pp_desc_for_page_table_setup p))::out.locs }
              | _ -> out
            end
         | _ -> out in
@@ -165,9 +194,9 @@ module Make
 
     let rec format_subexpr connective = let open ConstrGen in function
       | Atom atom -> begin match atom with
-        | LV (loc, v) -> key_value_str (dump_rloc A.dump_location loc) (pp_v v)
+        | LV (loc, v) -> key_value_str (dump_rloc A.dump_location loc) (pp_v_for_assertion v)
         | LL (loc1, loc2) -> key_value_str (A.pp_location_brk loc1) (A.pp_location_brk loc2)
-        | FF f -> raise (Unsupported "Fault in assertion") (* Fault.pp_fatom pp_v A.I.FaultType.pp f *) end
+        | FF _ -> raise (Unsupported "Fault in assertion") (* Fault.pp_fatom pp_v A.I.FaultType.pp f *) end
       | Not expr -> "~" ^ bracket (format_constraint_expr expr)
       | And exprs ->
         let str = String.concat " & " (List.map (format_subexpr (Some "&")) exprs) in
