@@ -53,7 +53,10 @@ module Make
       | Val (Constant.Concrete n) -> Concrete n
       | Val (Constant.PteVal p) ->
         let p = coerce_pte_val p in
-        if 0 = p.AArch64PteVal.valid then
+        let open AArch64PteVal in
+        if (p.db, p.dbm, p.el0) <> (1, 0, 1) then
+          raise (Unsupported (sprintf "(db, dbm, el0) = (%d, %d, %d); only (1, 0, 1) is supported" p.db p.dbm p.el0))
+        else if 0 = p.AArch64PteVal.valid then
           PTE_Desc_Invalid
         else
           PTE_Desc p
@@ -270,6 +273,9 @@ module Make
       List.iter (printf "\t%s;\n") locs;
       StringSet.iter (fun sym -> StringSet.iter (printf "\t%s ?-> %s;\n" sym) descs_written) ptes_accessed;
       print_endline "\"\"\""
+
+(* TODO: handle faults in assertions, recognise variables that only appear in pte, see what else remains to be done *)
+(* CAN'TDO (ask about): setting db/dbm, checking PTEs in assertions, see what else *)
 
     let print_converted (test : T.result) =
       let { branches; labels; addresses; locs; inits; types; pte_set; ptes_accessed; descs_written } = process_init_state test in
