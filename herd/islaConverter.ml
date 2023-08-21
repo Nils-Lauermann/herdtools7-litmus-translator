@@ -82,10 +82,10 @@ module Make
       | A.I.V.Val (Constant.Concrete n) -> Scalar.pp (looks_like_branch n) n
       | v -> raise (Unexpected ("Weird value in assertion LV atom: " ^ A.I.V.pp_v v))
 
-    let pp_desc_for_page_table_setup p = let open AArch64PteVal in match (p.oa, p.af) with
+    let phys_and_pp_desc_for_page_table_setup p = let open AArch64PteVal in match (p.oa, p.af) with
       | (OutputAddress.PTE _, _) -> raise (Unsupported "PTE no physical address (intermediate?)")
-      | (OutputAddress.PHY phys, 0) -> sprintf "pa_%s with [AF = 0b0]" phys
-      | (OutputAddress.PHY phys, 1) -> "pa_" ^ phys
+      | (OutputAddress.PHY phys, 0) -> (phys, sprintf "pa_%s with [AF = 0b0]" phys)
+      | (OutputAddress.PHY phys, 1) -> (phys, "pa_" ^ phys)
       | (OutputAddress.PHY _, n) -> raise (Unexpected (sprintf "AF (%d) has more than one bit" n))
 
     let type_name_to_isla_type = function
@@ -129,12 +129,16 @@ module Make
       let accum loc v out = let out = process_v out v in match loc with
         | A.Location_reg (proc, reg) ->
            let initialiser = (reg, (quote (pp_v_for_reset v))) in
-           let (ptes_accessed, descs_written) = match v_to_my_v v with
-             | PTE_Desc_Invalid -> (out.ptes_accessed, StringSet.add "invalid" out.descs_written)
-             | PTE_Desc p -> (out.ptes_accessed, StringSet.add (pp_desc_for_page_table_setup p) out.descs_written)
-             | PTE_Addr vaddr -> (StringSet.add vaddr out.ptes_accessed, out.descs_written)
-             | _ -> (out.ptes_accessed, out.descs_written) in
-           { out with inits = IntMap.update proc (cons_to_list_opt initialiser) out.inits; ptes_accessed; descs_written }
+           let out = match v_to_my_v v with
+             | PTE_Desc_Invalid ->
+               { out with descs_written = StringSet.add "invalid" out.descs_written }
+             | PTE_Desc p ->
+               let (phys, desc) = phys_and_pp_desc_for_page_table_setup p in
+               { out with descs_written = StringSet.add desc out.descs_written; addresses = StringSet.add phys out.addresses }
+             | PTE_Addr vaddr ->
+               { out with ptes_accessed = StringSet.add vaddr out.ptes_accessed; addresses = StringSet.add vaddr out.addresses }
+             | _ -> out in
+           { out with inits = IntMap.update proc (cons_to_list_opt initialiser) out.inits }
         | A.Location_global (A.I.V.Val (Constant.Symbolic (Constant.Virtual _)) as v2) ->
            let out = process_v out v2 in
            let location_name = A.I.V.pp_v v2 in
@@ -146,7 +150,7 @@ module Make
         | A.Location_global (A.I.V.Val (Constant.Symbolic (Constant.System (Constant.PTE, vaddr)))) ->
            begin match v_to_my_v v with
              | PTE_Desc_Invalid -> { out with pte_set = StringSet.add vaddr out.pte_set; locs = (sprintf "%s |-> invalid" vaddr)::out.locs }
-             | PTE_Desc p -> { out with pte_set = StringSet.add vaddr out.pte_set; locs = (sprintf "%s |-> %s" vaddr (pp_desc_for_page_table_setup p))::out.locs }
+             | PTE_Desc p -> { out with pte_set = StringSet.add vaddr out.pte_set; locs = (sprintf "%s |-> %s" vaddr (phys_and_pp_desc_for_page_table_setup p |> snd))::out.locs }
              | _ -> out
            end
         | _ -> out in
@@ -274,8 +278,8 @@ module Make
       StringSet.iter (fun sym -> StringSet.iter (printf "\t%s ?-> %s;\n" sym) descs_written) ptes_accessed;
       print_endline "\"\"\""
 
-(* TODO: handle faults in assertions, recognise variables that only appear in pte, see what else remains to be done *)
-(* CAN'TDO (ask about): setting db/dbm, checking PTEs in assertions, see what else *)
+(* TODO: handle faults in assertions *)
+(* CAN'TDO (ask about): setting db/dbm, checking PTEs in assertions *)
 
     let print_converted (test : T.result) =
       let { branches; labels; addresses; locs; inits; types; pte_set; ptes_accessed; descs_written } = process_init_state test in
