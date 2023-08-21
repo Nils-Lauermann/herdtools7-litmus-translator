@@ -66,7 +66,7 @@ module Make
     let pp_v_for_reset v = match v_to_my_v v with
       | Label label -> label ^ ":"
       | Concrete n -> sprintf "extz(%s, 64)" (Scalar.pp true n)
-      | PTE_Desc_Invalid -> "raw(extz(0x0, 64))"
+      | PTE_Desc_Invalid -> "extz(0x0, 64)"
       | PTE_Desc p ->
         let open AArch64PteVal in
         begin match (p.oa, p.af) with
