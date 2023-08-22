@@ -110,7 +110,7 @@ module Make
       addresses : StringSet.t;
       locs : string list;
       inits : (A.reg * string) list IntMap.t;
-      types : string list;
+      types : string StringMap.t;
       pte_set : StringSet.t;
       ptes_accessed : StringSet.t;
       descs_written : StringSet.t;
@@ -143,8 +143,8 @@ module Make
            let out = process_v out v2 in
            let location_name = A.I.V.pp_v v2 in
            let types = let open TestType in match type_to_isla_type (A.look_type test.type_env loc) with
-             | Some t -> out.types @ [t |> quote |> key_value_str (quote location_name)]
-             | _ -> out.types in
+             | Some t -> StringMap.add location_name t out.types
+             | None -> out.types in
            let value_str = A.I.V.pp_v v in
            { out with locs = (key_value_str ("*" ^ location_name) value_str)::out.locs; types }
         | A.Location_global (A.I.V.Val (Constant.Symbolic (Constant.System (Constant.PTE, vaddr)))) ->
@@ -161,7 +161,7 @@ module Make
           addresses = StringSet.empty;
           locs = [];
           inits = IntMap.empty;
-          types = [];
+          types = StringMap.empty;
           pte_set = StringSet.empty;
           ptes_accessed = StringSet.empty;
           descs_written = StringSet.empty;
@@ -262,11 +262,18 @@ module Make
       print_key "expect" (sprintf "\"%s\"" expect);
       print_key "assertion" (quote (format_constraint_expr expr))
 
-    let print_section_as_lines section lines =
+    (*let print_section_as_lines section lines =
       if lines <> [] then begin
         print_newline ();
         printf "[%s]\n" section;
         List.iter print_endline lines
+      end*)
+
+    let print_types types =
+      if not (StringMap.is_empty types) then begin
+        print_newline ();
+        print_endline "[types]";
+        StringMap.iter (fun k v -> print_endline (key_value_str (quote k) (quote v))) types
       end
 
     let print_page_table_setup addresses locs pte_unset ptes_accessed descs_written =
@@ -286,7 +293,7 @@ module Make
       print_header test addresses;
       Label.Set.iter (print_selfmodify test branches) labels;
       print_page_table_setup (StringSet.elements addresses) locs (StringSet.diff addresses pte_set) ptes_accessed descs_written;
-      print_section_as_lines "types" types;
+      print_types (StringSet.fold (fun vaddr types -> StringMap.update vaddr (function | Some t -> Some t | None -> Some "uint64_t") types) addresses types);
       print_threads test inits (addr_to_labels test);
       print_final test
   end
