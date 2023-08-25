@@ -8,6 +8,9 @@ module Make
     module Scalar = A.I.V.Cst.Scalar
     module ScalarSet = Set.Make(Scalar)
 
+    exception Unexpected of string
+    exception Unsupported of string
+
     let labels_to_offsets test addr =
       let to_offset = let open BranchTarget in function
         | Lbl label ->
@@ -21,21 +24,48 @@ module Make
 
     let quote s = sprintf "\"%s\"" (String.escaped s)
 
-    let print_header test addresses =
+    type test_info =
+    {
+      precision : Precision.t;
+      el0_threads : IntSet.t;
+    }
+
+    let parse_proc str =
+      if str.[0] = 'P' then
+        int_of_string_opt (String.sub str 1 (String.length str - 1))
+      else
+        None
+
+    let print_header_and_parse_info test addresses =
       print_key "arch" (quote (Archs.pp A.arch));
       print_key "name" (quote test.name.Name.name);
-      List.iter (fun (k, v) -> print_key (String.lowercase_ascii k) (quote v)) test.info;
+      let process_info info (key, value) = match String.lowercase_ascii key with
+        | "tthm" -> raise (Unsupported "Test uses TTHM key")
+        | "variant" -> begin match Precision.parse value with
+          | Some precision -> { info with precision }
+          | None -> raise (Unexpected ("Unknown value of variant key (precision expected): " ^ quote value))
+        end
+        | "el0" ->
+          let proc_strs = String.split_on_char ',' value in
+          let parse_proc str = match parse_proc str with
+            | None -> raise (Unexpected ("Failed to parse processor in EL0 list: " ^ quote str))
+            | Some proc -> proc in
+          let procs = List.map parse_proc proc_strs in
+          let el0_threads = List.fold_left (Fun.flip IntSet.add) info.el0_threads procs in
+          { info with el0_threads }
+        | key -> print_key key (quote value); info in
+      (* List.iter (fun (k, v) -> print_key (String.lowercase_ascii k) (quote v)) test.info; *)
+      let info_initial = { precision = Precision.Handled; el0_threads = IntSet.empty; } in
+      let info = List.fold_left process_info info_initial test.info in
       (* isla-axiomatic docs say addresses can be used as a synonym for symbolic, but this doesn't seem to actually work, so symbolic it is *)
-      print_key "symbolic" (addresses |> StringSet.elements |> List.map quote |> String.concat ", " |> sprintf "[%s]")
+      print_key "symbolic" (addresses |> StringSet.elements |> List.map quote |> String.concat ", " |> sprintf "[%s]");
+      info
 
     let looks_like_branch = let open Scalar in function
       | big when le (Scalar.of_int (1 lsl 32)) big -> false
       | b when equal (shift_right_logical b 26) (Scalar.of_int 0b000101) -> true
       | bcond when equal (shift_right_logical bcond 24) (Scalar.of_int 0b01010100) -> true
       | _ -> false
-
-    exception Unexpected of string
-    exception Unsupported of string
 
     (* TODO: unwind the layers of modules to avoid this regrettable hack: *)
     let coerce_pte_val : A.I.V.Cst.PteVal.t -> AArch64PteVal.t = Obj.magic
@@ -175,8 +205,9 @@ module Make
       else
         "R" ^ String.sub xreg 1 (String.length xreg - 1)
 
-    let print_threads test inits addr_to_labels =
+    let print_threads test inits addr_to_labels threads_with_faults info =
       let print_thread (proc, code, x) =
+        let has_faults = Option.is_some (IntSet.find_opt proc threads_with_faults) in
         print_newline ();
         Option.iter (fun _ -> raise (Unexpected "Encountered a Some")) x; (* what is this? *)
         printf "[thread.%s]\n" (Proc.dump proc);
@@ -191,10 +222,36 @@ module Make
           | [] -> ()
           | (start_addr, _)::_ -> print_labels start_addr; List.iter print_instruction code
         end;
+        let end_label = sprintf "islaconv_%s_end" (A.pp_proc proc) in
+        if has_faults && info.precision = Precision.Fatal then print_endline (end_label ^ ":");
         print_endline "\"\"\"";
         print_newline ();
         printf "[thread.%s.reset]\n" (Proc.dump proc);
-        List.iter (fun (r, v) -> print_key (to_sail_general_reg r) v) (IntMap.find_opt proc inits |> Option.value ~default:[]) in
+        List.iter (fun (r, v) -> print_key (to_sail_general_reg r) v) (IntMap.find_opt proc inits |> Option.value ~default:[]);
+        if Option.is_none (IntSet.find_opt proc info.el0_threads) then
+          print_key "\"PSTATE.EL\"" "0x01"; (* herd EL1 by default *)
+        if has_faults then begin
+          print_key "VBAR_EL1" (sprintf "\"extz(%#x000, 64)\"" (1 + proc));
+          print_key "R12" "\"extz(0x0, 64)\"";
+          print_newline ();
+          printf "[section.thread%s_el1_handler]\n" (Proc.dump proc);
+          print_key "address" (sprintf "\"%#x400\"" (1 + proc));
+          print_endline "code = \"\"\"";
+          print_endline "\tMRS X12,ELR_EL1";
+          begin match info.precision with
+            | Precision.Handled -> ()
+            | Precision.Fatal ->
+              print_endline ("\tMOV X14," ^ end_label);
+              print_endline "\tMSR ELR_EL1,X14"
+            | Precision.LoadsFatal -> raise (Unsupported "LoadsFatal precision setting")
+            (* LoadsFatal is undocumented and doesn't appear in the tests in catalogue *)
+            | Precision.Skip ->
+              print_endline "\tMRS X14,ELR_EL1";
+              print_endline "\tADD X14,X14,#4";
+              print_endline "\tMSR ELR_EL1,X14" end;
+          print_endline "\tERET";
+          print_endline "\"\"\""
+        end in
       List.iter print_thread test.start_points
 
     let bracket = sprintf "(%s)"
@@ -203,7 +260,8 @@ module Make
       | Atom atom -> begin match atom with
         | LV (loc, v) -> key_value_str (dump_rloc A.dump_location loc) (pp_v_for_assertion v)
         | LL (loc1, loc2) -> key_value_str (A.pp_location_brk loc1) (A.pp_location_brk loc2)
-        | FF _ -> raise (Unsupported "Fault in assertion") (* Fault.pp_fatom pp_v A.I.FaultType.pp f *) end
+        | FF ((proc, Some lbl), _, _) -> key_value_str (string_of_int proc ^ ":X12") (lbl ^ ":")
+        | FF _ -> raise (Unsupported "fault without label") end
       | Not expr -> "~" ^ bracket (format_constraint_expr expr)
       | And exprs ->
         let str = String.concat " & " (List.map (format_subexpr (Some "&")) exprs) in
@@ -219,6 +277,12 @@ module Make
         end
       | Implies (l, r) -> sprintf "(%s) -> (%s)" (format_constraint_expr l) (format_constraint_expr r)
     and format_constraint_expr e = format_subexpr None e
+
+    let rec fold_expr f a = let open ConstrGen in function
+      | Atom atom -> f a atom
+      | Not expr -> fold_expr f a expr
+      | And exprs | Or exprs -> List.fold_left (fold_expr f) a exprs
+      | Implies (l, r) -> fold_expr f (fold_expr f a l) r
 
     let expect_and_expr = let open ConstrGen in function
       | ForallStates e -> ("unsat", Not e)
@@ -276,24 +340,35 @@ module Make
         StringMap.iter (fun k v -> print_endline (key_value_str (quote k) (quote v))) types
       end
 
-    let print_page_table_setup addresses locs pte_unset ptes_accessed descs_written =
+    let print_page_table_setup nthreads threads_with_faults addresses locs pte_unset ptes_accessed descs_written =
       print_newline ();
       print_endline "page_table_setup = \"\"\"";
       printf "\tphysical %s;\n" (String.concat " " (List.map ((^) "pa_") addresses));
       StringSet.iter (fun addr -> printf "\t%s |-> pa_%s;\n" addr addr) pte_unset;
       List.iter (printf "\t%s;\n") locs;
       StringSet.iter (fun sym -> StringSet.iter (printf "\t%s ?-> %s;\n" sym) descs_written) ptes_accessed;
+      for proc = 0 to nthreads - 1 do
+        if Option.is_some (IntSet.find_opt proc threads_with_faults) then
+          printf "\tidentity %#x000 with code;\n" (1 + proc)
+      done;
       print_endline "\"\"\""
 
-(* TODO: handle faults in assertions *)
-(* CAN'TDO (ask about): setting db/dbm, checking PTEs in assertions *)
+    let find_threads_with_faults test =
+      let check_atom threads = function
+        | ConstrGen.FF ((proc, _), _, _) -> IntSet.add proc threads
+        | _ -> threads in
+      fold_expr check_atom IntSet.empty (snd (expect_and_expr (test.cond)))
+
+(* TODO: checking PTEs in assertions? *)
+(* not relevant/don't know how to do: setting db/dbm *)
 
     let print_converted (test : T.result) =
       let { branches; labels; addresses; locs; inits; types; pte_set; ptes_accessed; descs_written } = process_init_state test in
-      print_header test addresses;
+      let info = print_header_and_parse_info test addresses in
       Label.Set.iter (print_selfmodify test branches) labels;
-      print_page_table_setup (StringSet.elements addresses) locs (StringSet.diff addresses pte_set) ptes_accessed descs_written;
+      let threads_with_faults = find_threads_with_faults test in
+      print_page_table_setup (List.length test.start_points) threads_with_faults (StringSet.elements addresses) locs (StringSet.diff addresses pte_set) ptes_accessed descs_written;
       print_types (StringSet.fold (fun vaddr types -> StringMap.update vaddr (function | Some t -> Some t | None -> Some "uint64_t") types) addresses types);
-      print_threads test inits (addr_to_labels test);
+      print_threads test inits (addr_to_labels test) threads_with_faults info;
       print_final test
   end
