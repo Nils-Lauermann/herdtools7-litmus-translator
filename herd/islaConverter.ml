@@ -229,7 +229,7 @@ module Make
         printf "[thread.%s.reset]\n" (Proc.dump proc);
         List.iter (fun (r, v) -> print_key (to_sail_general_reg r) v) (IntMap.find_opt proc inits |> Option.value ~default:[]);
         if Option.is_none (IntSet.find_opt proc info.el0_threads) then
-          print_key "\"PSTATE.EL\"" "0x01"; (* herd EL1 by default *)
+          print_key "\"PSTATE.EL\"" "\"0b01\""; (* herd EL1 by default *)
         if has_faults then begin
           print_key "VBAR_EL1" (sprintf "\"extz(%#x000, 64)\"" (1 + proc));
           print_key "R12" "\"extz(0x0, 64)\"";
