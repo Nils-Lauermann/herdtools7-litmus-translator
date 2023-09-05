@@ -82,7 +82,8 @@ module Make
                different sizes *)
             MachSize.Byte
           end in *)
-        IslaConv.print_converted test;
+        let isla_test = IslaConv.convert_test test in
+        IslaConv.print_isla_test isla_test;
 (* And run test *) (* actually, don't *)
         (* let module T =
           Top_herd.Make
