@@ -32,6 +32,13 @@ module Make (A:Arch_herd.S) = struct
     else
       "R" ^ String.sub xreg 1 (String.length xreg - 1)
 
+  let print_locations locations =
+    if locations <> [] then begin
+      print_newline ();
+      print_endline "[locations]";
+      List.iter (fun (addr, v) -> print_key (quote addr) (quote (A.V.Cst.pp_v v))) locations
+    end
+
   let print_types types =
     if not (StringMap.is_empty types) then begin
       print_newline ();
@@ -68,7 +75,7 @@ module Make (A:Arch_herd.S) = struct
     ProcMap.iter print_exception_code_page_for test.threads;
     print_endline "\"\"\""
 
-  let print_threads test =
+  let print_threads test vmsa =
     let cons_to_list_opt x = function
     | None -> Some [x]
     | Some xs -> Some (x::xs) in
@@ -78,13 +85,15 @@ module Make (A:Arch_herd.S) = struct
     let print_thread proc thread =
       print_newline ();
       printf "[thread.%d]\n" proc;
+      let open Thread in
+      if not vmsa then
+        print_key "init" (sprintf "{ %s }" (thread.reset |> List.map (fun (reg, v) -> key_value_str (A.pp_reg reg) (A.V.Cst.pp_v v |> quote)) |> String.concat ", "));
       print_endline "code = \"\"\"";
       let print_labels addr =
         Option.iter (List.iter (printf "%s:\n")) (IntMap.find_opt addr addr_to_labels) in
       let print_instruction (addr, instr) =
         printf "\t%s\n" (A.dump_instruction instr);
         print_labels (A.size_of_ins instr + addr) in
-        let open Thread in
         begin match thread.instructions with
         | [] -> ()
         | (start_addr, _)::_ as instructions -> print_labels start_addr; List.iter print_instruction instructions
@@ -93,33 +102,35 @@ module Make (A:Arch_herd.S) = struct
       let open Info in
       if test.info.precision = Precision.Fatal then print_endline (end_label ^ ":");
       print_endline "\"\"\"";
-      print_newline ();
-      printf "[thread.%s.reset]\n" (Proc.dump proc);
-      List.iter (fun (reg, cst) -> print_key (to_sail_general_reg reg) (quote (pp_v_for_reset cst))) thread.reset;
-      print_newline ();
-      List.iter (fun (lhs, rhs) -> print_key lhs rhs) thread.reset_extra;
-      print_newline ();
-      (* Always add a handler because faults might not explicitly be tracked *)
-      (* Might add noise to tests though, maybe add a flag not to do this? *)
-      printf "[section.thread%d_el1_handler]\n" proc;
-      let offset = if Option.is_some (ProcSet.find_opt proc test.info.el0_threads) then "400" else "000" in
-      print_key "address" (sprintf "\"%#x%s\"" (1 + proc) offset);
-      print_endline "code = \"\"\"";
-      print_endline "\tMRS X12,ELR_EL1";
-      begin match test.info.precision with
-        | Precision.Handled -> ()
-        | Precision.Fatal ->
-          print_endline ("\tMOV X14," ^ end_label);
-          print_endline "\tMSR ELR_EL1,X14"
-        | Precision.LoadsFatal -> raise (Unsupported "LoadsFatal precision setting")
-        (* LoadsFatal is undocumented and doesn't appear in the tests in catalogue *)
-        | Precision.Skip ->
-          print_endline "\tMRS X14,ELR_EL1";
-          print_endline "\tADD X14,X14,#4";
-          print_endline "\tMSR ELR_EL1,X14"
-      end;
-      print_endline "\tERET";
-      print_endline "\"\"\"" in
+      if vmsa then begin
+        print_newline ();
+        printf "[thread.%s.reset]\n" (Proc.dump proc);
+        List.iter (fun (reg, cst) -> print_key (to_sail_general_reg reg) (quote (pp_v_for_reset cst))) thread.reset;
+        print_newline ();
+        List.iter (fun (lhs, rhs) -> print_key lhs rhs) thread.reset_extra;
+        print_newline ();
+        (* Always add a handler because faults might not explicitly be tracked *)
+        (* Might add noise to tests though, maybe add a flag not to do this? *)
+        printf "[section.thread%d_el1_handler]\n" proc;
+        let offset = if Option.is_some (ProcSet.find_opt proc test.info.el0_threads) then "400" else "000" in
+        print_key "address" (sprintf "\"%#x%s\"" (1 + proc) offset);
+        print_endline "code = \"\"\"";
+        print_endline "\tMRS X12,ELR_EL1";
+        begin match test.info.precision with
+          | Precision.Handled -> ()
+          | Precision.Fatal ->
+            print_endline ("\tMOV X14," ^ end_label);
+            print_endline "\tMSR ELR_EL1,X14"
+          | Precision.LoadsFatal -> raise (Unsupported "LoadsFatal precision setting")
+          (* LoadsFatal is undocumented and doesn't appear in the tests in catalogue *)
+          | Precision.Skip ->
+            print_endline "\tMRS X14,ELR_EL1";
+            print_endline "\tADD X14,X14,#4";
+            print_endline "\tMSR ELR_EL1,X14"
+        end;
+        print_endline "\tERET";
+        print_endline "\"\"\""
+      end in
     ProcMap.iter print_thread test.threads
 
   let print_final final =
@@ -129,10 +140,11 @@ module Make (A:Arch_herd.S) = struct
     print_key "expect" (sprintf "\"%s\"" (pp_expect_for_assertion final.expect));
     print_key "assertion" (quote final.assertion)
 
-  let print_isla_test test =
+  let print_isla_test test self vmsa =
     print_header test;
-    print_page_table_setup test;
+    if vmsa then print_page_table_setup test;
+    print_locations (List.rev test.locations);
     print_types test.types;
-    print_threads test;
+    print_threads test vmsa;
     print_final test.final
 end

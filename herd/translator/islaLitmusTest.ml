@@ -125,6 +125,7 @@ module Make (A:Arch_herd.S) = struct
     label_constants : Label.Set.t;
     branch_constants : ScalarSet.t;
     addresses : StringSet.t;
+    locations : (string * A.V.Cst.v) list;
     page_table_setup : PageTableSetup.t;
     types : string StringMap.t;
     threads : Thread.t ProcMap.t;
@@ -145,6 +146,7 @@ module Make (A:Arch_herd.S) = struct
       label_constants = Label.Set.empty;
       branch_constants = ScalarSet.empty;
       addresses = StringSet.empty;
+      locations = [];
       page_table_setup = PageTableSetup.empty;
       types = StringMap.empty;
       threads = empty_threads 0 ProcMap.empty;

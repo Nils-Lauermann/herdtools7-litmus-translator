@@ -49,7 +49,7 @@ module Make =
     | Some v ->
         try Some (Sys.getenv v) with Not_found -> None
 
-    let includes =
+    let _includes =
       List.map
         (fun d ->
           let len = String.length d in
@@ -59,7 +59,7 @@ module Make =
         C.includes
 
     let open_lib name =
-      try try_opens ("."::includes) name
+      try try_opens (["/"]) "dev/null" (* Terrible hack *)
       with Exit -> try match envlib with
       | Some lib -> try_open lib name
       | None -> raise Exit

@@ -83,8 +83,10 @@ module Make
                different sizes *)
             MachSize.Byte
           end in *)
-        let isla_test = Converter.convert_test test in
-        Printer.print_isla_test isla_test;
+        let self = C.variant Variant.Self in
+        let vmsa = C.variant Variant.VMSA in
+        let isla_test = Converter.convert_test test vmsa in
+        Printer.print_isla_test isla_test self vmsa;
 (* And run test *) (* actually, don't *)
         (* let module T =
           Top_herd.Make

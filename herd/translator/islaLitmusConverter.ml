@@ -52,7 +52,7 @@ module Make (A:Arch_herd.S) = struct
     | bcond when equal (shift_right_logical bcond 24) (Scalar.of_int 0b01010100) -> true
     | _ -> false
 
-  let process_initial_state init_state type_env test =
+  let process_initial_state init_state type_env test vmsa =
     let process_v test v = match v_to_cst v with
       | Constant.Symbolic (Constant.Virtual _ as s) ->
         { test with addresses = StringSet.add (Constant.pp_symbol s) test.addresses }
@@ -84,12 +84,14 @@ module Make (A:Arch_herd.S) = struct
           | Some t -> StringMap.add addr t test.types
           | None -> test.types in
         begin match rhs with
-          | A.V.Val (Constant.Concrete rhs) ->
+          | A.V.Val (Constant.Concrete rhs) when vmsa ->
             let page_table_setup =
               let open PageTableSetup in
               { test.page_table_setup with initial_values = StringMap.add addr rhs test.page_table_setup.initial_values } in
             { test with page_table_setup; types }
-          | _ -> raise (Unexpected (sprintf "Virtual address %s initialised to non-scalar value %s" addr (A.V.pp_v rhs)))
+          | _ when vmsa ->
+            raise (Unexpected (sprintf "Virtual address %s initialised to non-scalar value %s" addr (A.V.pp_v rhs)))
+          | _ -> { test with locations = (addr, v_to_cst rhs)::test.locations }
         end
       | A.Location_global (A.V.Val (Constant.Symbolic (Constant.System (Constant.PTE, vaddr)))) ->
         begin match Desc.of_cst (v_to_cst rhs) with
@@ -191,12 +193,12 @@ module Make (A:Arch_herd.S) = struct
       |> StringMap.fold (fun _lhs -> DescSet.fold add_desc) possible_mappings in
     { test with page_table_setup = { test.page_table_setup with initial_mappings; possible_mappings; physical_addresses; } }
 
-  let convert_test (herd_test : HerdTest.result) =
+  let convert_test (herd_test : HerdTest.result) vmsa =
     let open Test_herd in
     let test = Test.empty herd_test.arch herd_test.name.Name.name (List.length herd_test.start_points) in
     let test = { test with Test.info = process_info herd_test.Test_herd.info; labels = herd_test.program } in
-    let test = process_initial_state herd_test.init_state herd_test.type_env test in
-    let test = default_addresses_to_64_bit test in
+    let test = process_initial_state herd_test.init_state herd_test.type_env test vmsa in
+    let test = if vmsa then default_addresses_to_64_bit test else test in
     let test = complete_page_table_setup test in
     let test = process_threads herd_test.start_points test in
     process_final herd_test.cond test
