@@ -8,7 +8,7 @@
 
 (executable
  (name herd)
- (public_name herd7)
+ (public_name litmus-translator)
  (libraries unix herdtools)
  (modules_without_implementation
   AArch64Sig
@@ -18,3 +18,4 @@
   sem
   XXXMem
   port))
+
