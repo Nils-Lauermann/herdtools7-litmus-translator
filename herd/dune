@@ -1,7 +1,8 @@
 (dirs :standard \ tests libdir)
 
-(rule
- (copy ../Version.ml Version.ml))
+(include_subdirs unqualified)
+
+(rule (copy ../Version.ml Version.ml))
 
 (ocamllex lexConf_herd)
 

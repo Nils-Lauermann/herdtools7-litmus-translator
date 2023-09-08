@@ -55,8 +55,9 @@ module Make
     (C:Config) =
   struct
     module T = Test_herd.Make(S.A)
-    module IslaConv = IslaConverter.Make(S.A)
-     let run dirty start_time filename chan env splitted =
+    module Converter = IslaLitmusConverter.Make(S.A)
+    module Printer = IslaLitmusPrinter.Make(S.A)
+     let run _cache_type _dirty _start_time filename chan env splitted =
       try
          let parsed = P.parse chan splitted in
         let name = splitted.Splitter.name in
@@ -82,8 +83,8 @@ module Make
                different sizes *)
             MachSize.Byte
           end in *)
-        let isla_test = IslaConv.convert_test test in
-        IslaConv.print_isla_test isla_test;
+        let isla_test = Converter.convert_test test in
+        Printer.print_isla_test isla_test;
 (* And run test *) (* actually, don't *)
         (* let module T =
           Top_herd.Make
