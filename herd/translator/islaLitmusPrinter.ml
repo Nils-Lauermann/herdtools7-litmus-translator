@@ -96,6 +96,7 @@ module Make (A:Arch_herd.S) = struct
       print_newline ();
       printf "[thread.%s.reset]\n" (Proc.dump proc);
       List.iter (fun (reg, cst) -> print_key (to_sail_general_reg reg) (quote (pp_v_for_reset cst))) thread.reset;
+      print_newline ();
       List.iter (fun (lhs, rhs) -> print_key lhs rhs) thread.reset_extra;
       print_newline ();
       (* Always add a handler because faults might not explicitly be tracked *)
