@@ -46,12 +46,6 @@ module Make (A:Arch_herd.S) = struct
     | Ty type_name -> type_name_to_isla_type type_name
     | _ -> None
 
-  let looks_like_branch = let open Scalar in function
-    | big when le (Scalar.of_int (1 lsl 32)) big -> false
-    | b when equal (shift_right_logical b 26) (Scalar.of_int 0b000101) -> true
-    | bcond when equal (shift_right_logical bcond 24) (Scalar.of_int 0b01010100) -> true
-    | _ -> false
-
   let process_initial_state init_state type_env test vmsa =
     let process_v test v = match v_to_cst v with
       | Constant.Symbolic (Constant.Virtual _ as s) ->
@@ -91,7 +85,7 @@ module Make (A:Arch_herd.S) = struct
             { test with page_table_setup; types }
           | _ when vmsa ->
             raise (Unexpected (sprintf "Virtual address %s initialised to non-scalar value %s" addr (A.V.pp_v rhs)))
-          | _ -> { test with locations = (addr, v_to_cst rhs)::test.locations }
+          | _ -> { test with locations = (addr, v_to_cst rhs)::test.locations; types }
         end
       | A.Location_global (A.V.Val (Constant.Symbolic (Constant.System (Constant.PTE, vaddr)))) ->
         begin match Desc.of_cst (v_to_cst rhs) with
@@ -127,7 +121,8 @@ module Make (A:Arch_herd.S) = struct
       let reset_extra = ("VBAR_EL1", sprintf "\"%#x%s\"" (1 + proc) (if is_el1 then "000" else "400"))::reset_extra in
       let open Thread in
       let thread = { thread with instructions = code; reset_extra } in
-      { test with threads = ProcMap.add proc thread test.threads }
+      let addr_to_instr = List.fold_left (fun addr_to_instr (addr, instr) -> IntMap.add addr instr addr_to_instr) test.addr_to_instr code in
+      { test with threads = ProcMap.add proc thread test.threads; addr_to_instr }
     in
     List.fold_left process_thread test start_points
 

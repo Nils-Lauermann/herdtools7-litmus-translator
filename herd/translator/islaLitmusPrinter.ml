@@ -32,6 +32,46 @@ module Make (A:Arch_herd.S) = struct
     else
       "R" ^ String.sub xreg 1 (String.length xreg - 1)
 
+      let pp_v_for_init = function
+      | Constant.Label (_, label) -> sprintf "%s:" label
+      | Constant.Concrete n -> Scalar.pp (looks_like_branch n) n (* print branches in hex *)
+      | v -> A.V.Cst.pp_v v
+  
+      exception Unknown_Self_Modify of string
+
+  let encoding instruction =
+    let instruction_str = A.dump_instruction instruction in
+    let open String in
+    if starts_with ~prefix:"B ." instruction_str then
+      let offset_str = sub instruction_str 3 (length instruction_str - 3) in
+      0x1400_0000 lor (int_of_string offset_str asr 2)
+    else if starts_with ~prefix:"B.EQ ." instruction_str then
+      let offset_str = sub instruction_str 6 (length instruction_str - 6) in
+      0x5400_0000 lor (int_of_string offset_str lsl 3)
+    else
+      raise (Unknown_Self_Modify instruction_str)
+
+  let print_selfmodify test =
+    let for_label label =
+      print_newline ();
+      print_endline "[[self_modify]]";
+      print_key "address" (quote (label ^ ":"));
+      print_endline "bytes = 4"; (* assume AArch64 *)
+      print_endline "values = [";
+      ScalarSet.iter (fun branch -> Scalar.pp true branch |> printf "  \"%s\",\n") test.branch_constants;
+      let addr = Label.Map.find label test.labels in
+      (* IntMap.find addr test.code_segment |> snd |> List.hd |> snd *)
+      let instr = IntMap.find addr test.addr_to_instr in
+      let to_offset = let open BranchTarget in function
+        | Lbl label ->
+          let target = Label.Map.find label test.labels in
+          Offset (target - addr)
+        | Offset _ as o -> o in
+      let instr = A.map_labels_base to_offset instr in
+      printf "  \"%#x\"\n" (encoding instr);
+      print_endline "]" in
+    Label.Set.iter for_label test.label_constants
+
   let print_locations locations =
     if locations <> [] then begin
       print_newline ();
@@ -86,8 +126,10 @@ module Make (A:Arch_herd.S) = struct
       print_newline ();
       printf "[thread.%d]\n" proc;
       let open Thread in
-      if not vmsa then
-        print_key "init" (sprintf "{ %s }" (thread.reset |> List.map (fun (reg, v) -> key_value_str (A.pp_reg reg) (A.V.Cst.pp_v v |> quote)) |> String.concat ", "));
+      if not vmsa then begin
+        let pp_init (reg, v) = key_value_str (A.pp_reg reg) (quote (pp_v_for_init v)) in
+        print_key "init" (sprintf "{ %s }" (thread.reset |> List.map pp_init |> String.concat ", "))
+      end;
       print_endline "code = \"\"\"";
       let print_labels addr =
         Option.iter (List.iter (printf "%s:\n")) (IntMap.find_opt addr addr_to_labels) in
@@ -143,6 +185,7 @@ module Make (A:Arch_herd.S) = struct
   let print_isla_test test self vmsa =
     print_header test;
     if vmsa then print_page_table_setup test;
+    if self then print_selfmodify test;
     print_locations (List.rev test.locations);
     print_types test.types;
     print_threads test vmsa;

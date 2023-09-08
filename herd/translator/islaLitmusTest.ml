@@ -130,6 +130,7 @@ module Make (A:Arch_herd.S) = struct
     types : string StringMap.t;
     threads : Thread.t ProcMap.t;
     labels : int Label.Map.t;
+    addr_to_instr : A.instr IntMap.t;
     final : Final.t;
   }
 
@@ -151,6 +152,7 @@ module Make (A:Arch_herd.S) = struct
       types = StringMap.empty;
       threads = empty_threads 0 ProcMap.empty;
       labels = Label.Map.empty;
+      addr_to_instr = IntMap.empty;
       final = Final.empty;
     }
 end

@@ -33,4 +33,14 @@ module Make (A:Arch_herd.S) = struct
         | Concrete n -> sprintf "extz(%s, 64)" (A.V.Cst.Scalar.pp true n)
         | Symbolic (System (PTE, addr)) -> sprintf "pte3(%s, page_table_base)" addr
         | v -> A.V.Cst.pp_v v
+
+  let looks_like_branch =
+    let module Test = IslaLitmusTest.Make(A) in
+    let module Scalar = Test.Scalar in
+    let open Scalar in
+    function
+      | big when le (Scalar.of_int (1 lsl 32)) big -> false
+      | b when equal (shift_right_logical b 26) (Scalar.of_int 0b000101) -> true
+      | bcond when equal (shift_right_logical bcond 24) (Scalar.of_int 0b01010100) -> true
+      | _ -> false
 end
