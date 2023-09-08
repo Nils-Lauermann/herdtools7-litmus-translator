@@ -1,4 +1,4 @@
-open IslaLitmusCommon
+open IslaLitmusErrors
 
 module Make (A:Arch_herd.S) = struct
   module Scalar = A.V.Cst.Scalar

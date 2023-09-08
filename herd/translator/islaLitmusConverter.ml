@@ -1,10 +1,10 @@
 open IslaLitmusTest
-open IslaLitmusCommon
 
 module Make (A:Arch_herd.S) = struct
   module HerdTest = Test_herd.Make(A)
   module Test = IslaLitmusTest.Make(A)
   open Test
+  open IslaLitmusCommon.Make(A)
 
   let sprintf = Printf.sprintf
 
@@ -129,9 +129,9 @@ module Make (A:Arch_herd.S) = struct
     in
     List.fold_left process_thread test start_points
 
-  let pp_v_for_assertion = function
-    | A.I.V.Val (Constant.Concrete n) -> Scalar.pp (looks_like_branch n) n
-    | v -> raise (Unexpected ("Weird value in assertion LV atom: " ^ A.I.V.pp_v v))
+  let pp_v_for_assertion v = match v_to_cst v with
+    | Constant.Concrete n -> Scalar.pp (looks_like_branch n) n
+    | v -> pp_v_for_reset v
 
   let bracket = sprintf "(%s)"
 

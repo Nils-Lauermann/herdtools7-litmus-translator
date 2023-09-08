@@ -1,9 +1,8 @@
 open Printf
-open IslaLitmusCommon
 
 module Make (A:Arch_herd.S) = struct
-  module Test = IslaLitmusTest.Make(A)
-  open Test
+  open IslaLitmusCommon.Make(A)
+  open IslaLitmusTest.Make(A)
 
   let key_value_str = sprintf "%s = %s"
   let print_key k v = print_endline (key_value_str k v)
@@ -68,23 +67,6 @@ module Make (A:Arch_herd.S) = struct
       printf "\tidentity %#x000 with code;\n" (1 + proc) in
     ProcMap.iter print_exception_code_page_for test.threads;
     print_endline "\"\"\""
-
-  let pp_v_for_reset cst =
-    match Desc.of_cst cst with
-      | Some (Desc.Valid p) ->
-        let open AArch64PteVal in
-        begin match (p.oa, p.af) with
-          | (OutputAddress.PTE _, _) -> raise (Unsupported "PTE no physical address (intermediate?)")
-          | (OutputAddress.PHY phys, 0) -> sprintf "bvxor(extz(0x400, 64), mkdesc3(oa=pa_%s))" phys (* TODO *)
-          | (OutputAddress.PHY phys, 1) -> sprintf "mkdesc3(oa=pa_%s)" phys
-          | (OutputAddress.PHY _, n) -> raise (Unexpected (sprintf "AF (%d) has more than one bit" n))
-        end
-      | Some Desc.Invalid -> "extz(0x0, 64)"
-      | None -> let open Constant in match cst with
-        | Label (_, label) -> label ^ ":"
-        | Concrete n -> sprintf "extz(%s, 64)" (Scalar.pp true n)
-        | Symbolic (System (PTE, addr)) -> sprintf "pte3(%s, page_table_base)" addr
-        | v -> A.V.Cst.pp_v v
 
   let print_threads test =
     let cons_to_list_opt x = function
