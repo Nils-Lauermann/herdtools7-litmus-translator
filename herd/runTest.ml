@@ -57,7 +57,7 @@ module Make
     module T = Test_herd.Make(S.A)
     module Converter = IslaLitmusConverter.Make(S.A)
     module Printer = IslaLitmusPrinter.Make(S.A)
-     let run _cache_type _dirty _start_time filename chan env splitted =
+     let run _dirty _start_time filename chan env splitted =
       try
          let parsed = P.parse chan splitted in
         let name = splitted.Splitter.name in
@@ -83,7 +83,7 @@ module Make
                different sizes *)
             MachSize.Byte
           end in *)
-        let self = C.variant Variant.Self in
+        let self = C.variant Variant.Ifetch in
         let vmsa = C.variant Variant.VMSA in
         let isla_test = Converter.convert_test test vmsa in
         Printer.print_isla_test isla_test self vmsa;
