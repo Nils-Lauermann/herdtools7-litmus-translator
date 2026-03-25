@@ -142,7 +142,7 @@ module Make (A:Arch_herd.S) = struct
       end;
       let end_label = sprintf "islaconv_%s_end" (A.pp_proc proc) in
       let open Info in
-      if test.info.precision = Precision.Fatal then print_endline (end_label ^ ":");
+      if test.info.handling = Fault.Handling.Fatal then print_endline (end_label ^ ":");
       print_endline "\"\"\"";
       if vmsa then begin
         print_newline ();
@@ -158,14 +158,12 @@ module Make (A:Arch_herd.S) = struct
         print_key "address" (sprintf "\"%#x%s\"" (1 + proc) offset);
         print_endline "code = \"\"\"";
         print_endline "\tMRS X12,ELR_EL1";
-        begin match test.info.precision with
-          | Precision.Handled -> ()
-          | Precision.Fatal ->
+        begin match test.info.handling with
+          | Fault.Handling.Handled -> ()
+          | Fault.Handling.Fatal ->
             print_endline ("\tMOV X14," ^ end_label);
             print_endline "\tMSR ELR_EL1,X14"
-          | Precision.LoadsFatal -> raise (Unsupported "LoadsFatal precision setting")
-          (* LoadsFatal is undocumented and doesn't appear in the tests in catalogue *)
-          | Precision.Skip ->
+          | Fault.Handling.Skip ->
             print_endline "\tMRS X14,ELR_EL1";
             print_endline "\tADD X14,X14,#4";
             print_endline "\tMSR ELR_EL1,X14"

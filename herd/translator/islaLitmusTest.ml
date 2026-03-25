@@ -13,14 +13,14 @@ module Make (A:Arch_herd.S) = struct
   module Info = struct
     type t =
       {
-        precision : Precision.t;
+        handling : Fault.Handling.t;
         el0_threads : ProcSet.t;
         other_info : (string * string) list;
       }
 
     let empty =
       {
-        precision = Precision.Handled;
+        handling = Fault.Handling.Fatal;
         el0_threads = ProcSet.empty;
         other_info = [];
       }

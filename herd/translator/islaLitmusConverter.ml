@@ -19,8 +19,8 @@ module Make (A:Arch_herd.S) = struct
     let quote s = sprintf "\"%s\"" (String.escaped s) in
     let process_key_value test_info (key, value) = match key with
       | "tthm" -> raise (Unsupported "Test uses TTHM key")
-      | "variant" -> begin match Precision.parse value with
-        | Some precision -> { test_info with precision }
+      | "variant" -> begin match Fault.Handling.parse value with
+        | Some handling -> { test_info with handling }
         | None -> raise (Unexpected ("Unknown value of variant key (precision expected): " ^ quote value))
       end
       | "el0" ->
